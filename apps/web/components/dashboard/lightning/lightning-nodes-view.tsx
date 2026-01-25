@@ -27,35 +27,26 @@ const CHAIN_NAMES: Record<string, string> = {
  * Authentication Status Banner Component
  * Shows wallet authentication status at the top
  */
-function AuthenticationBanner({
+const AuthenticationStatus = ({
   authenticated,
   authenticating,
-  walletAddress,
   error,
+  onRetry,
 }: {
   authenticated: boolean;
   authenticating: boolean;
-  walletAddress: string | null;
   error: string | null;
-}) {
-  const [copiedAddress, setCopiedAddress] = useState(false);
-
-  const handleCopyAddress = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (walletAddress) {
-      navigator.clipboard.writeText(walletAddress);
-      setCopiedAddress(true);
-      setTimeout(() => setCopiedAddress(false), 2000);
-    }
-  };
-
-  if (authenticating) {
+  onRetry: () => void;
+}) => {
+  if (authenticating || (!authenticated && !error)) {
     return (
-      <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 mb-4 flex items-center gap-3">
-        <Loader2 className="h-5 w-5 animate-spin text-gray-600" />
-        <div>
-          <p className="font-rubik-medium text-gray-900">Authenticating Wallet</p>
-          <p className="text-sm text-gray-700">Establishing clearnode connection...</p>
+      <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-2 mb-2 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
+          <div>
+            <p className="text-sm font-rubik-medium text-blue-900">Wallet Authentication in process</p>
+            <p className="text-xs text-blue-700">Connecting to Yellow Network...</p>
+          </div>
         </div>
       </div>
     );
@@ -63,83 +54,38 @@ function AuthenticationBanner({
 
   if (error && !authenticated) {
     return (
-      <div className="bg-gray-100 border border-gray-300 rounded-xl p-4 mb-4 flex items-center gap-3">
-        <AlertCircle className="h-5 w-5 text-gray-700" />
-        <div>
-          <p className="font-rubik-medium text-gray-900">Authentication Failed</p>
-          <p className="text-sm text-gray-700">{error}</p>
+      <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-2 mb-2 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <AlertCircle className="h-5 w-5 text-red-600" />
+          <div>
+            <p className="text-sm font-rubik-medium text-red-900">Wallet Authentication failed</p>
+            <p className="text-xs text-red-700">Please try again</p>
+          </div>
         </div>
+        <button
+          onClick={onRetry}
+          className="px-3 py-1.5 bg-red-100 hover:bg-red-200 text-red-700 text-xs font-medium rounded-lg transition-colors flex items-center gap-1"
+        >
+          Try Again
+        </button>
       </div>
     );
   }
 
-  if (authenticated && walletAddress) {
+  if (authenticated) {
     return (
-      <div className="space-y-3 mb-4">
-        {/* Wallet Status */}
-        <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 flex items-center gap-3">
-          <CheckCircle2 className="h-5 w-5 text-gray-700" />
-          <div className="flex-1">
-            <p className="font-rubik-medium text-gray-900">
-              Wallet Authenticated
-            </p>
-            <div className="flex items-center gap-2 mt-1">
-              <p 
-                className="text-sm text-gray-700 font-mono cursor-pointer hover:text-gray-900 transition-colors"
-                onClick={handleCopyAddress}
-                title="Click to copy full address"
-              >
-                {walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}
-              </p>
-              <button
-                onClick={handleCopyAddress}
-                className="text-gray-600 hover:text-gray-900 transition-colors p-1 rounded hover:bg-gray-200"
-                title="Copy wallet address"
-              >
-                <Copy className="h-3.5 w-3.5" />
-              </button>
-              {copiedAddress && (
-                <span className="text-xs text-green-600 font-medium">Copied!</span>
-              )}
-            </div>
-          </div>
-          <div className="ml-auto flex items-center gap-2">
-            {/* Unified Balance tile (Coming Soon) */}
-            <TooltipProvider>
-              <Tooltip delayDuration={150}>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    disabled
-                    className="inline-flex items-center justify-center px-3 py-1 rounded-lg bg-black text-white text-xs font-rubik-medium cursor-not-allowed opacity-80"
-                  >
-                    <Plus className="h-3 w-3 mr-1" />
-                    Unified Balance
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent
-                  side="top"
-                  className="bg-black/85 text-white text-xs px-3 py-2 rounded-md border border-white/10 max-w-xs space-y-1.5"
-                >
-                  <p className="font-semibold">Unified Balance</p>
-                  <p className="text-[11px] font-medium text-gray-200">Coming soon</p>
-                  <p className="text-[11px]">
-                    Unified balance funding is disabled in production right now. This feature will be available soon.
-                  </p>
-                  <p className="pt-1 text-[11px] text-white/80">
-                    Add Funds to Unified Balance
-                  </p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          </div>
+      <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-2 mb-2 flex items-center gap-3">
+        <CheckCircle2 className="h-5 w-5 text-green-600" />
+        <div>
+          <p className="text-sm font-rubik-medium text-green-900">Wallet Authentication successful</p>
+          <p className="text-xs text-green-700">Connected to Yellow Network</p>
         </div>
       </div>
     );
   }
 
   return null;
-}
+};
 
 // Join search input removed; join is now inside the Create modal.
 
@@ -186,11 +132,10 @@ function LightningNodeCard({
 
   return (
     <div
-      className={`bg-white rounded-2xl p-4 space-y-3 border transition-colors cursor-pointer group ${
-        isInvitation
-          ? 'border-gray-200 hover:border-gray-300'
-          : 'border-gray-200 hover:border-gray-300'
-      }`}
+      className={`bg-white rounded-2xl p-4 space-y-3 border transition-colors cursor-pointer group ${isInvitation
+        ? 'border-gray-200 hover:border-gray-300'
+        : 'border-gray-200 hover:border-gray-300'
+        }`}
       onClick={onClick}
     >
       {/* Header with Status */}
@@ -277,7 +222,7 @@ function LightningNodeCard({
         <div className="text-xs text-gray-500">
           Created {new Date(node.createdAt).toLocaleDateString()}
         </div>
-  <div className="flex items-center gap-1 text-xs text-gray-700 group-hover:text-black">
+        <div className="flex items-center gap-1 text-xs text-gray-700 group-hover:text-black">
           <span>{isInvitation ? 'View Invitation' : 'View Details'}</span>
           <ChevronRight className="h-3 w-3" />
         </div>
@@ -292,8 +237,8 @@ function LightningNodeCard({
  */
 export function LightningNodesView() {
   const {
-    authenticated,
-    authenticating,
+    authenticated = false,
+    authenticating = false,
     walletAddress,
     allSessions,
     activeSessions,
@@ -317,7 +262,7 @@ export function LightningNodesView() {
       if (!authenticated && !authenticating) {
         console.log('[LightningNodesView] User navigated to Lightning section - initializing...');
         await authenticate('base');
-        
+
         // After authentication, fetch sessions
         await discoverSessions('base');
       } else if (authenticated && allSessions.length === 0 && !loading) {
@@ -394,15 +339,19 @@ export function LightningNodesView() {
     );
   }
 
-  // Show loading state while authenticating
-  if (authenticating && !authenticated) {
-    return (
-      <div className="flex flex-col items-center justify-center py-16">
-        <Loader2 className="h-8 w-8 animate-spin text-gray-400 mb-4" />
-        <p className="text-gray-500 font-rubik-normal">Authenticating wallet...</p>
-        <p className="text-sm text-gray-400 mt-2">Connecting to Yellow Network</p>
-      </div>
-    );
+  const handleRetry = async () => {
+    // Retry authentication
+    await authenticate('base');
+  };
+
+  // Show loading state while authenticating (Initial full-screen loader can be removed or kept minimal if desired, 
+  // but user requested "Auth in process" section in empty state mostly).
+  // Keeping this block for now if it's the very first load, but maybe we can relax it to show empty state earlier?
+  // User asked: "before clicking on create/join at that meantime it should show Wallet Authentication in process"
+  if (authenticating && !authenticated && !error) {
+    // If we want to show the empty state structure immediately even during auth, we should skip this return.
+    // However, if we skip this, we need to ensure 'loading' doesn't block rendering.
+    // Let's rely on the AuthenticationStatus component inside the Empty State view instead.
   }
 
   const safeActiveSessions = activeSessions || [];
@@ -410,20 +359,21 @@ export function LightningNodesView() {
   const hasAnySessions = safeActiveSessions.length > 0 || safeInvitations.length > 0;
 
   // Show empty state if no sessions
-  if (!hasAnySessions && !loading) {
+  if (!hasAnySessions) {
     return (
       <>
-        {/* Authentication Banner */}
-        <AuthenticationBanner
-          authenticated={authenticated}
-          authenticating={authenticating}
-          walletAddress={walletAddress}
-          error={error}
-        />
-
         {/* Empty State */}
-        <div className="flex flex-col items-center justify-center py-16 md:py-20">
-          <div className="-mt-32">
+        <div className="flex flex-col items-center justify-center py-2 relative">
+          <div className="w-full max-w-2xl mx-auto z-10">
+            <AuthenticationStatus
+              authenticated={authenticated}
+              authenticating={authenticating}
+              error={error}
+              onRetry={handleRetry}
+            />
+          </div>
+
+          <div className="-mt-4">
             <Image
               src="/empty-mailbox-illustration-with-spiderweb-and-flie-2025-10-20-04-28-09-utc.gif"
               alt="No Lightning Nodes"
@@ -432,11 +382,12 @@ export function LightningNodesView() {
               className="object-contain mix-blend-multiply"
             />
           </div>
-          <p className="text-gray-600 text-lg md:text-xl font-rubik-medium z-10 -mt-16 mb-4">
+
+          <p className="text-gray-600 text-lg md:text-xl font-rubik-medium z-10 -mt-2 mb-4 text-center px-4">
             No Lightning Nodes Available
           </p>
-          <p className="text-sm text-gray-500 mb-6">
-            Create a new Lightning Node or join an existing one using the button below
+          <p className="text-sm text-gray-500 mb-6 text-center px-4">
+            Create or join a Lightning Node to get started.
           </p>
           <button
             onClick={() => setCreateModalOpen(true)}
@@ -472,11 +423,11 @@ export function LightningNodesView() {
   return (
     <>
       {/* Authentication Banner */}
-      <AuthenticationBanner
+      <AuthenticationStatus
         authenticated={authenticated}
         authenticating={authenticating}
-        walletAddress={walletAddress}
         error={error}
+        onRetry={handleRetry}
       />
 
       <div className="space-y-6">

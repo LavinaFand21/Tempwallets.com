@@ -66,7 +66,7 @@ export class AddressManager implements IAddressManager {
     private addressCacheRepository: AddressCacheRepository,
     private aptosAddressManager: AptosAddressManager,
     private pimlicoConfig: PimlicoConfigService,
-  ) {}
+  ) { }
 
   /**
    * Clear all cached addresses for a user (both in-memory and database)
@@ -96,9 +96,13 @@ export class AddressManager implements IAddressManager {
     // If we have cached addresses, check if they're complete
     if (Object.keys(cachedAddresses).length > 0) {
       const allExpectedChains = this.getAllExpectedChainNames();
-      const hasAllChains = allExpectedChains.every(
-        (chain) => cachedAddresses[chain] !== undefined,
-      );
+
+      const missing = allExpectedChains.filter(c => cachedAddresses[c] === undefined);
+      if (missing.length > 0) {
+        this.logger.debug(`Partial cache hit for ${userId}. Missing: ${missing.join(', ')}`);
+      }
+
+      const hasAllChains = missing.length === 0;
 
       if (hasAllChains) {
         // We have all addresses cached, return immediately
@@ -207,19 +211,19 @@ export class AddressManager implements IAddressManager {
         key: keyof WalletAddresses;
         value: string | null;
       }> = [
-        { key: 'polkadot', value: substrateAddresses.polkadot ?? null },
-        {
-          key: 'hydrationSubstrate',
-          value: substrateAddresses.hydration ?? null,
-        },
-        { key: 'bifrostSubstrate', value: substrateAddresses.bifrost ?? null },
-        { key: 'uniqueSubstrate', value: substrateAddresses.unique ?? null },
-        { key: 'paseo', value: substrateAddresses.paseo ?? null },
-        {
-          key: 'paseoAssethub',
-          value: substrateAddresses.paseoAssethub ?? null,
-        },
-      ];
+          { key: 'polkadot', value: substrateAddresses.polkadot ?? null },
+          {
+            key: 'hydrationSubstrate',
+            value: substrateAddresses.hydration ?? null,
+          },
+          { key: 'bifrostSubstrate', value: substrateAddresses.bifrost ?? null },
+          { key: 'uniqueSubstrate', value: substrateAddresses.unique ?? null },
+          { key: 'paseo', value: substrateAddresses.paseo ?? null },
+          {
+            key: 'paseoAssethub',
+            value: substrateAddresses.paseoAssethub ?? null,
+          },
+        ];
 
       for (const { key, value } of substrateMappings) {
         // Only update if not already cached or if cached value is null
@@ -261,11 +265,11 @@ export class AddressManager implements IAddressManager {
         key: keyof WalletAddresses;
         value: string;
       }> = [
-        { key: 'aptos', value: aptosAddress },
-        { key: 'aptosMainnet', value: aptosAddress },
-        { key: 'aptosTestnet', value: aptosAddress },
-        { key: 'aptosDevnet', value: aptosAddress },
-      ];
+          { key: 'aptos', value: aptosAddress },
+          { key: 'aptosMainnet', value: aptosAddress },
+          { key: 'aptosTestnet', value: aptosAddress },
+          { key: 'aptosDevnet', value: aptosAddress },
+        ];
 
       for (const { key, value } of aptosMappings) {
         // Only update if not already cached

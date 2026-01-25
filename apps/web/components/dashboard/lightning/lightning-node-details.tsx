@@ -265,11 +265,10 @@ export function LightningNodeDetails({ lightningNodeId, onClose }: LightningNode
         <div className="flex items-center justify-between bg-white rounded-xl p-4 border border-gray-200">
           <span className="text-sm text-gray-600">Status</span>
           <span
-            className={`px-3 py-1 rounded-full text-xs font-medium ${
-              lightningNode.status === 'open'
+            className={`px-3 py-1 rounded-full text-xs font-medium ${lightningNode.status === 'open'
                 ? 'bg-gray-200 text-gray-800'
                 : 'bg-gray-100 text-gray-800'
-            }`}
+              }`}
           >
             {lightningNode.status === 'open' ? 'Open' : 'Closed'}
           </span>
@@ -406,9 +405,8 @@ export function LightningNodeDetails({ lightningNodeId, onClose }: LightningNode
               {lightningNode.participants.map((participant, index) => (
                 <div
                   key={participant.address}
-                  className={`p-4 flex items-center justify-between ${
-                    index !== lightningNode.participants.length - 1 ? 'border-b border-gray-100' : ''
-                  }`}
+                  className={`p-4 flex items-center justify-between ${index !== lightningNode.participants.length - 1 ? 'border-b border-gray-100' : ''
+                    }`}
                 >
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
@@ -466,22 +464,20 @@ export function LightningNodeDetails({ lightningNodeId, onClose }: LightningNode
                 {lightningNode.transactions.map((tx, index) => (
                   <div
                     key={tx.id}
-                    className={`p-4 ${
-                      index !== lightningNode.transactions!.length - 1 ? 'border-b border-gray-100' : ''
-                    }`}
+                    className={`p-4 ${index !== lightningNode.transactions!.length - 1 ? 'border-b border-gray-100' : ''
+                      }`}
                   >
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-700">
                         {tx.type}
                       </span>
                       <span
-                        className={`text-xs px-2 py-0.5 rounded ${
-                          tx.status === 'confirmed'
+                        className={`text-xs px-2 py-0.5 rounded ${tx.status === 'confirmed'
                             ? 'bg-green-100 text-green-700'
                             : tx.status === 'pending'
-                            ? 'bg-yellow-100 text-yellow-700'
-                            : 'bg-red-100 text-red-700'
-                        }`}
+                              ? 'bg-yellow-100 text-yellow-700'
+                              : 'bg-red-100 text-red-700'
+                          }`}
                       >
                         {tx.status}
                       </span>

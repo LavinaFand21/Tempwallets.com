@@ -15,6 +15,12 @@ export function LightningNodesProvider({ children }: { children: React.ReactNode
     value.loading,
     value.error,
     value.lastFetched,
+    value.authenticated,
+    value.authenticating,
+    value.walletAddress,
+    value.allSessions,
+    value.activeSessions,
+    value.invitations,
   ]);
 
   return (

@@ -6,18 +6,14 @@ import { BalanceView } from './balance-view';
 import RecentTransactions from './recent-transactions';
 import { LightningNodesView } from '../lightning/lightning-nodes-view';
 import { useWalletData } from '@/hooks/useWalletData';
-import { LightningNodesProvider } from '@/hooks/lightning-nodes-context';
-import { useLightningNodes } from '@/hooks/useLightningNodes';
+import { LightningNodesProvider, useLightningNodes } from '@/hooks/lightning-nodes-context';
 
 type ViewType = 'balance' | 'transactions' | 'lightningNodes';
 
 /**
- * Component with three text buttons: "Balance", "Transactions", and "Lightning Nodes"
- * Renders BalanceView when balance is active, RecentTransactions when transactions is active,
- * and LightningNodesView when lightningNodes is active
- * Default to "Balance" view on mount
+ * Inner component that consumes the context
  */
-export function BalanceTransactionsToggle() {
+function BalanceTransactionsToggleContent() {
   const [activeView, setActiveView] = useState<ViewType>('balance');
   const { loading, refreshBalances, refreshTransactions } = useWalletData();
   const { loading: lightningLoading, refreshNodes } = useLightningNodes();
@@ -47,11 +43,10 @@ export function BalanceTransactionsToggle() {
           <button
             onClick={() => setActiveView('balance')}
             type="button"
-            className={`font-rubik-medium transition-all cursor-pointer select-none py-2 px-3 -mx-3 rounded-lg relative z-10 ${
-              activeView === 'balance'
+            className={`font-rubik-medium transition-all cursor-pointer select-none py-2 px-3 -mx-3 rounded-lg relative z-10 ${activeView === 'balance'
                 ? 'text-gray-800 font-semibold'
                 : 'text-gray-300 hover:text-gray-400'
-            }`}
+              }`}
             style={{ touchAction: 'manipulation' }}
           >
             Balance
@@ -59,11 +54,10 @@ export function BalanceTransactionsToggle() {
           <button
             onClick={() => setActiveView('transactions')}
             type="button"
-            className={`font-rubik-medium transition-all cursor-pointer select-none py-2 px-3 -mx-3 rounded-lg relative z-10 ${
-              activeView === 'transactions'
+            className={`font-rubik-medium transition-all cursor-pointer select-none py-2 px-3 -mx-3 rounded-lg relative z-10 ${activeView === 'transactions'
                 ? 'text-gray-800 font-semibold'
                 : 'text-gray-300 hover:text-gray-400'
-            }`}
+              }`}
             style={{ touchAction: 'manipulation' }}
           >
             Transactions
@@ -71,11 +65,10 @@ export function BalanceTransactionsToggle() {
           <button
             onClick={() => setActiveView('lightningNodes')}
             type="button"
-            className={`font-rubik-medium transition-all cursor-pointer select-none py-2 px-2 -mx-2 rounded-lg relative z-10 text-sm sm:text-base ${
-              activeView === 'lightningNodes'
+            className={`font-rubik-medium transition-all cursor-pointer select-none py-2 px-2 -mx-2 rounded-lg relative z-10 text-sm sm:text-base ${activeView === 'lightningNodes'
                 ? 'text-gray-800 font-semibold'
                 : 'text-gray-300 hover:text-gray-400'
-            }`}
+              }`}
             style={{ touchAction: 'manipulation' }}
           >
             Lightning Nodes
@@ -106,12 +99,24 @@ export function BalanceTransactionsToggle() {
         ) : activeView === 'transactions' ? (
           <RecentTransactions showAll={false} hideHeader />
         ) : (
-          <LightningNodesProvider>
-            <LightningNodesView />
-          </LightningNodesProvider>
+          <LightningNodesView />
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * Component with three text buttons: "Balance", "Transactions", and "Lightning Nodes"
+ * Renders BalanceView when balance is active, RecentTransactions when transactions is active,
+ * and LightningNodesView when lightningNodes is active
+ * Default to "Balance" view on mount
+ */
+export function BalanceTransactionsToggle() {
+  return (
+    <LightningNodesProvider>
+      <BalanceTransactionsToggleContent />
+    </LightningNodesProvider>
   );
 }
 
