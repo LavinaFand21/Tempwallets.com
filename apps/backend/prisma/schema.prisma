@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
@@ -343,8 +343,8 @@ model WcSession {
 
   // EIP-7702 specific
   eip7702Only      Boolean  @default(true) // Must be true
-  approvedChains   Int[] // EVM chain IDs (e.g., [1, 8453, 42161])
-  approvedAccounts String[] // CAIP-10 account IDs
+  approvedChains   String // Serialized Int[]: EVM chain IDs (e.g., "[1, 8453]")
+  approvedAccounts String // Serialized String[]: CAIP-10 account IDs
 
   // Timestamps
   createdAt  DateTime @default(now())
@@ -371,10 +371,10 @@ model WcProposal {
   proposerIcon String?
 
   // Proposal requirements
-  requiredChains  String[] // CAIP-2 chain IDs (e.g., ["eip155:1"])
-  requiredMethods String[] // RPC methods requested
-  requiredEvents  String[] // Events requested
-  optionalChains  String[] // Optional chains
+  requiredChains  String // Serialized String[]
+  requiredMethods String // Serialized String[]
+  requiredEvents  String // Serialized String[]
+  optionalChains  String // Serialized String[]
 
   // Status
   status          ProposalStatus @default(PENDING)

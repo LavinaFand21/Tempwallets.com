@@ -412,7 +412,7 @@ export class LightningNodeService {
 
       if (participants.length < 2) {
         throw new BadRequestException(
-          'Lightning Nodes require at least 1 participant address besides the creator.',
+          'Participant address required.',
         );
       }
 
@@ -544,9 +544,8 @@ export class LightningNodeService {
         `Failed to create Lightning Node: ${err.message}`,
         err.stack,
       );
-      throw new BadRequestException(
-        `Failed to create Lightning Node: ${err.message}`,
-      );
+      // Don't prefix with "Failed to create Lightning Node: " to avoid repetition
+      throw new BadRequestException(err.message);
     }
   }
 
@@ -1806,9 +1805,7 @@ export class LightningNodeService {
       }
     }
 
-    throw new BadRequestException(
-      'Invalid Lightning Node URI format. Expected lightning://0x<bytes32>.',
-    );
+    throw new BadRequestException('Invalid Lightning Node URI format.');
   }
 
   /**
