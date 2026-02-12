@@ -26,14 +26,14 @@ interface EvmWalletConnectModalProps {
 export function EvmWalletConnectModal({ open, onOpenChange }: EvmWalletConnectModalProps) {
   // Use authenticated user ID (Google user) or fallback to fingerprint
   const { userId } = useAuth();
-  const { 
-    isInitializing, 
-    sessions, 
-    pair, 
+  const {
+    isInitializing,
+    sessions,
+    pair,
     disconnect,
     initialize
   } = useEvmWalletConnect(userId);
-  
+
   const [uriInput, setUriInput] = useState('');
   const [isPairing, setIsPairing] = useState(false);
   const [pairError, setPairError] = useState<string | null>(null);
@@ -86,7 +86,7 @@ export function EvmWalletConnectModal({ open, onOpenChange }: EvmWalletConnectMo
       console.warn('WalletConnect is still initializing, please wait...');
       return;
     }
-    
+
     setShowScanner(true);
     setCameraError(null);
     // Small delay to ensure DOM element exists
@@ -101,7 +101,7 @@ export function EvmWalletConnectModal({ open, onOpenChange }: EvmWalletConnectMo
     try {
       setCameraError(null);
       setIsScanning(false);
-      
+
       const html5QrCode = new Html5Qrcode('evm-walletconnect-scanner', {
         verbose: false,
       });
@@ -121,16 +121,16 @@ export function EvmWalletConnectModal({ open, onOpenChange }: EvmWalletConnectMo
             handleConnect(decodedText);
           }
         },
-        () => {}
+        () => { }
       );
-      
+
       setIsScanning(true);
       setCameraError(null);
     } catch (err: any) {
       console.error('Scanner error:', err);
       scannerRef.current = null;
       setIsScanning(false);
-      
+
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
         setCameraError('Camera access denied. Please allow camera permissions or paste a URL below.');
       } else if (err.name === 'NotFoundError') {
@@ -143,7 +143,7 @@ export function EvmWalletConnectModal({ open, onOpenChange }: EvmWalletConnectMo
 
   const handleConnect = async (uri?: string) => {
     const uriToUse = uri || uriInput.trim();
-    
+
     if (!uriToUse) {
       setPairError('Please enter a WalletConnect URI');
       return;
@@ -181,21 +181,21 @@ export function EvmWalletConnectModal({ open, onOpenChange }: EvmWalletConnectMo
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent 
-        className="sm:max-w-[400px] p-0 rounded-3xl bg-[#1a1a1a] border border-gray-800 text-white shadow-2xl overflow-hidden"
+      <DialogContent
+        className="w-full max-w-[360px] p-0 rounded-2xl bg-black/90 border border-white/10 text-white shadow-2xl backdrop-blur overflow-hidden"
         aria-describedby={undefined}
       >
         <DialogTitle className="sr-only">Connect EVM DApp via WalletConnect</DialogTitle>
         {isInitializing ? (
           <div className="flex items-center justify-center p-12">
-            <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+            <Loader2 className="h-8 w-8 animate-spin text-white" />
           </div>
         ) : sessions.length === 0 ? (
           <div className="flex flex-col">
             {/* Header */}
             <div className="text-center pt-6 pb-4">
               <h2 className="text-xl font-semibold text-white">Connect Your Tempwallet</h2>
-              <p className="text-sm text-gray-400 mt-2">Scan QR code to connect to a dApp</p>
+              <p className="text-sm text-white/60 mt-2">Scan QR code to connect to a dApp</p>
             </div>
 
             {/* QR Scanner */}
@@ -205,7 +205,7 @@ export function EvmWalletConnectModal({ open, onOpenChange }: EvmWalletConnectMo
                   <div
                     id="evm-walletconnect-scanner"
                     ref={scannerContainerRef}
-                    className="w-full aspect-square rounded-2xl overflow-hidden bg-black"
+                    className="w-full aspect-square rounded-2xl overflow-hidden bg-black border border-white/10"
                   />
                   {/* Loading state while scanner starts */}
                   {!isScanning && !cameraError && (
@@ -217,7 +217,7 @@ export function EvmWalletConnectModal({ open, onOpenChange }: EvmWalletConnectMo
                   {/* Error state if camera fails */}
                   {cameraError && (
                     <div className="absolute inset-0 flex items-center justify-center bg-black/90 rounded-2xl p-6">
-                      <p className="text-gray-400 text-center text-sm">{cameraError}</p>
+                      <p className="text-white/60 text-center text-sm">{cameraError}</p>
                     </div>
                   )}
                 </>
@@ -226,9 +226,9 @@ export function EvmWalletConnectModal({ open, onOpenChange }: EvmWalletConnectMo
                 <button
                   onClick={handleStartScanner}
                   disabled={isInitializing}
-                  className="w-full aspect-square rounded-2xl bg-gray-800/30 border border-gray-700 hover:bg-gray-800/50 disabled:bg-gray-800/20 disabled:cursor-not-allowed transition-all flex items-center justify-center"
+                  className="w-full aspect-square rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center group"
                 >
-                  <span className="text-gray-400 text-sm">
+                  <span className="text-white/60 group-hover:text-white transition-colors text-sm">
                     {isInitializing ? 'Initializing...' : 'Tap to scan QR code'}
                   </span>
                 </button>
@@ -236,7 +236,7 @@ export function EvmWalletConnectModal({ open, onOpenChange }: EvmWalletConnectMo
             </div>
 
             {/* Scan instruction */}
-            {showScanner && <p className="text-center text-gray-400 text-sm py-4">Scan QR to connect</p>}
+            {showScanner && <p className="text-center text-white/40 text-sm py-4">Scan QR to connect</p>}
 
             {/* URL Input */}
             <div className="px-4 pb-6">
@@ -254,12 +254,12 @@ export function EvmWalletConnectModal({ open, onOpenChange }: EvmWalletConnectMo
                       handleConnect();
                     }
                   }}
-                  className="w-full px-4 py-3 pr-24 bg-gray-800/50 border border-gray-700 rounded-xl text-white placeholder-gray-500 focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                  className="w-full px-4 py-3 pr-24 bg-white/5 border border-white/10 rounded-xl text-white placeholder:text-white/40 focus:border-white/40 focus:ring-white/20 text-sm"
                 />
                 <button
                   onClick={() => handleConnect()}
                   disabled={isPairing || !uriInput.trim() || !userId}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 px-4 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:cursor-not-allowed rounded-lg transition-colors text-sm font-medium text-white"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 px-4 py-1.5 bg-white text-black hover:bg-white/90 disabled:bg-white/20 disabled:text-white/50 disabled:cursor-not-allowed rounded-full transition-colors text-sm font-medium"
                 >
                   {isPairing ? (
                     <span className="flex items-center gap-1.5">
@@ -280,7 +280,7 @@ export function EvmWalletConnectModal({ open, onOpenChange }: EvmWalletConnectMo
           /* Connected Sessions View */
           <div className="p-6 space-y-4">
             <h2 className="text-xl font-semibold text-white text-center">Your Connected dApps</h2>
-            
+
             <div className="bg-green-500/10 border border-green-500/30 rounded-xl p-3">
               <p className="text-green-400 font-medium text-sm text-center">
                 ✅ {sessions.length} active connection{sessions.length > 1 ? 's' : ''}
@@ -290,21 +290,21 @@ export function EvmWalletConnectModal({ open, onOpenChange }: EvmWalletConnectMo
             {sessions
               .filter((session) => session && session.topic)
               .map((session) => (
-                <div key={session.topic} className="border border-gray-700 rounded-xl p-4 bg-gray-800/50">
+                <div key={session.topic} className="border border-white/10 rounded-xl p-4 bg-white/5">
                   <div className="flex items-center justify-between">
                     <div className="flex-1 min-w-0">
                       <h3 className="font-semibold text-white truncate">
                         {session.peer?.metadata?.name || 'Unknown DApp'}
                       </h3>
                       {session.peer?.metadata?.url && (
-                        <p className="text-sm text-gray-400 truncate">
+                        <p className="text-sm text-white/60 truncate">
                           {session.peer.metadata.url}
                         </p>
                       )}
                     </div>
                     <button
                       onClick={() => handleDisconnect(session.topic)}
-                      className="ml-3 p-2 text-red-400 hover:bg-red-500/10 rounded-xl transition-colors flex-shrink-0"
+                      className="ml-3 p-2 text-white/60 hover:text-red-400 hover:bg-white/5 rounded-xl transition-colors flex-shrink-0"
                       title="Disconnect"
                     >
                       <X className="h-5 w-5" />
@@ -315,14 +315,14 @@ export function EvmWalletConnectModal({ open, onOpenChange }: EvmWalletConnectMo
 
             {/* Add New Connection Section */}
             {!showScanner && (
-              <div className="pt-4 border-t border-gray-700">
+              <div className="pt-4 border-t border-white/10">
                 <button
                   onClick={handleStartScanner}
                   disabled={isInitializing}
-                  className="w-full py-3 px-4 bg-gray-800/50 border border-gray-700 hover:bg-gray-800/70 disabled:bg-gray-800/20 disabled:cursor-not-allowed rounded-xl transition-all flex items-center justify-center gap-2"
+                  className="w-full py-3 px-4 bg-white/5 border border-white/10 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-all flex items-center justify-center gap-2 group"
                 >
-                  <Plus className="h-5 w-5 text-gray-400" />
-                  <span className="text-gray-400 text-sm font-medium">
+                  <Plus className="h-5 w-5 text-white/60 group-hover:text-white" />
+                  <span className="text-white/60 group-hover:text-white text-sm font-medium">
                     Connect Another dApp
                   </span>
                 </button>
@@ -336,7 +336,7 @@ export function EvmWalletConnectModal({ open, onOpenChange }: EvmWalletConnectMo
                   <div
                     id="evm-walletconnect-scanner"
                     ref={scannerContainerRef}
-                    className="w-full aspect-square rounded-2xl overflow-hidden bg-black"
+                    className="w-full aspect-square rounded-2xl overflow-hidden bg-black border border-white/10"
                   />
                   {!isScanning && !cameraError && (
                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/90 rounded-2xl">
@@ -346,12 +346,12 @@ export function EvmWalletConnectModal({ open, onOpenChange }: EvmWalletConnectMo
                   )}
                   {cameraError && (
                     <div className="absolute inset-0 flex items-center justify-center bg-black/90 rounded-2xl p-6">
-                      <p className="text-gray-400 text-center text-sm">{cameraError}</p>
+                      <p className="text-white/60 text-center text-sm">{cameraError}</p>
                     </div>
                   )}
                 </div>
 
-                {showScanner && <p className="text-center text-gray-400 text-sm py-2">Scan QR to connect</p>}
+                {showScanner && <p className="text-center text-white/40 text-sm py-2">Scan QR to connect</p>}
 
                 <div className="relative">
                   <input
@@ -367,12 +367,12 @@ export function EvmWalletConnectModal({ open, onOpenChange }: EvmWalletConnectMo
                         handleConnect();
                       }
                     }}
-                    className="w-full px-4 py-3 pr-24 bg-gray-800/50 border border-gray-700 rounded-xl text-white placeholder-gray-500 focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                    className="w-full px-4 py-3 pr-24 bg-white/5 border border-white/10 rounded-xl text-white placeholder:text-white/40 focus:border-white/40 focus:ring-white/20 text-sm"
                   />
                   <button
                     onClick={() => handleConnect()}
                     disabled={isPairing || !uriInput.trim() || !userId}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 px-4 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:cursor-not-allowed rounded-lg transition-colors text-sm font-medium text-white"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 px-4 py-1.5 bg-white text-black hover:bg-white/90 disabled:bg-white/20 disabled:text-white/50 disabled:cursor-not-allowed rounded-full transition-colors text-sm font-medium"
                   >
                     {isPairing ? (
                       <span className="flex items-center gap-1.5">
@@ -395,7 +395,7 @@ export function EvmWalletConnectModal({ open, onOpenChange }: EvmWalletConnectMo
                     setUriInput('');
                     setPairError(null);
                   }}
-                  className="w-full py-2 px-4 bg-gray-800/50 border border-gray-700 hover:bg-gray-800/70 rounded-xl transition-all text-gray-400 text-sm font-medium mt-2"
+                  className="w-full py-2 px-4 bg-white/5 border border-white/10 hover:bg-white/10 rounded-xl transition-all text-white/60 hover:text-white text-sm font-medium mt-2"
                 >
                   Cancel
                 </button>

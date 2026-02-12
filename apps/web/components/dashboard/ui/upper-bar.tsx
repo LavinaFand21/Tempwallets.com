@@ -50,9 +50,14 @@ const UpperBar = () => {
 
         {/* Center - Text Content */}
         <div className="text-center px-4">
-          <h1 className="text-white text-lg lg:text-xl whitespace-nowrap">
-            {isAuthenticated && user ? `Hello, ${user.name || user.email || 'User'}!` : 'Hello, User!'}
-          </h1>
+          <div className="flex items-center justify-center gap-2">
+            <h1 className="text-white text-lg lg:text-xl whitespace-nowrap">
+              {isAuthenticated && user ? `Hello, ${user.name || user.email || 'User'}!` : 'Hello, User!'}
+            </h1>
+            <span className="px-1.5 py-0.5 rounded-md bg-blue-600/20 text-[10px] font-bold text-blue-400 border border-blue-500/30 tracking-wider shadow-[0_0_10px_rgba(59,130,246,0.1)]">
+              BETA
+            </span>
+          </div>
           <p className="text-gray-500 text-xs lg:text-sm font-light -mt-1">
             {isAuthenticated ? 'Welcome back' : 'Sign in to sync your wallets'}
           </p>

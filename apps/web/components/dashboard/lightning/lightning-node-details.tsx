@@ -1,5 +1,7 @@
 'use client';
 
+import { QRCodeCanvas } from 'qrcode.react';
+
 import { useState, useEffect } from 'react';
 import { Loader2, Zap, Copy, ArrowRightLeft, Plus, Minus, Wallet, X, ChevronDown, ChevronUp } from 'lucide-react';
 import { Button } from '@repo/ui/components/ui/button';
@@ -42,6 +44,7 @@ export function LightningNodeDetails({ lightningNodeId, onClose }: LightningNode
   const [withdrawModalOpen, setWithdrawModalOpen] = useState(false);
   const [showParticipants, setShowParticipants] = useState(true);
   const [showTransactions, setShowTransactions] = useState(false);
+  const [showQr, setShowQr] = useState(false);
 
   // Best-effort presence heartbeat for this node.
   useEffect(() => {
@@ -265,11 +268,10 @@ export function LightningNodeDetails({ lightningNodeId, onClose }: LightningNode
         <div className="flex items-center justify-between bg-white rounded-xl p-4 border border-gray-200">
           <span className="text-sm text-gray-600">Status</span>
           <span
-            className={`px-3 py-1 rounded-full text-xs font-medium ${
-              lightningNode.status === 'open'
-                ? 'bg-gray-200 text-gray-800'
-                : 'bg-gray-100 text-gray-800'
-            }`}
+            className={`px-3 py-1 rounded-full text-xs font-medium ${lightningNode.status === 'open'
+              ? 'bg-gray-200 text-gray-800'
+              : 'bg-gray-100 text-gray-800'
+              }`}
           >
             {lightningNode.status === 'open' ? 'Open' : 'Closed'}
           </span>
@@ -304,6 +306,43 @@ export function LightningNodeDetails({ lightningNodeId, onClose }: LightningNode
               </button>
             </div>
             <p className="text-xs font-mono text-gray-700 break-all">{lightningNode.uri}</p>
+          </div>
+        )}
+
+        {/* QR Code Section */}
+        {lightningNode.status === 'open' && (
+          <div className="bg-white rounded-xl p-4 border border-gray-200">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-gray-700 font-medium">QR Code</p>
+              <button
+                onClick={() => setShowQr(!showQr)}
+                className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-900 px-3 py-1.5 rounded-lg transition-colors font-medium border border-gray-200"
+              >
+                {showQr ? 'Hide QR Code' : 'Show QR Code'}
+              </button>
+            </div>
+
+            {showQr && (
+              <div className="mt-4 flex flex-col items-center animate-in fade-in slide-in-from-top-2 duration-200">
+                <div className="bg-white p-3 rounded-xl border-2 border-gray-100 mb-4 shadow-sm">
+                  <QRCodeCanvas value={lightningNode.uri} size={180} level="H" />
+                </div>
+
+                <div className="w-full bg-gray-50 rounded-xl p-3 border border-gray-200">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-xs text-gray-500">Node URI</p>
+                    <button
+                      onClick={handleCopyUri}
+                      className="text-xs text-gray-700 hover:text-gray-900 flex items-center gap-1"
+                    >
+                      <Copy className="h-3 w-3" />
+                      {copiedUri ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                  <p className="text-xs font-mono text-gray-500 break-all">{lightningNode.uri}</p>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -406,9 +445,8 @@ export function LightningNodeDetails({ lightningNodeId, onClose }: LightningNode
               {lightningNode.participants.map((participant, index) => (
                 <div
                   key={participant.address}
-                  className={`p-4 flex items-center justify-between ${
-                    index !== lightningNode.participants.length - 1 ? 'border-b border-gray-100' : ''
-                  }`}
+                  className={`p-4 flex items-center justify-between ${index !== lightningNode.participants.length - 1 ? 'border-b border-gray-100' : ''
+                    }`}
                 >
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
@@ -466,22 +504,20 @@ export function LightningNodeDetails({ lightningNodeId, onClose }: LightningNode
                 {lightningNode.transactions.map((tx, index) => (
                   <div
                     key={tx.id}
-                    className={`p-4 ${
-                      index !== lightningNode.transactions!.length - 1 ? 'border-b border-gray-100' : ''
-                    }`}
+                    className={`p-4 ${index !== lightningNode.transactions!.length - 1 ? 'border-b border-gray-100' : ''
+                      }`}
                   >
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-700">
                         {tx.type}
                       </span>
                       <span
-                        className={`text-xs px-2 py-0.5 rounded ${
-                          tx.status === 'confirmed'
-                            ? 'bg-green-100 text-green-700'
-                            : tx.status === 'pending'
+                        className={`text-xs px-2 py-0.5 rounded ${tx.status === 'confirmed'
+                          ? 'bg-green-100 text-green-700'
+                          : tx.status === 'pending'
                             ? 'bg-yellow-100 text-yellow-700'
                             : 'bg-red-100 text-red-700'
-                        }`}
+                          }`}
                       >
                         {tx.status}
                       </span>
