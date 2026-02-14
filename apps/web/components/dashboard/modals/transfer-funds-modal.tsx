@@ -171,45 +171,45 @@ export function TransferFundsModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[450px] bg-white text-gray-900">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-gray-900">
-            <ArrowRightLeft className="h-5 w-5 text-blue-600" />
+      <DialogContent className="border-white/10 bg-black/90 text-white shadow-2xl backdrop-blur w-full max-w-[360px] p-6 rounded-2xl [&>button]:text-white [&>button]:hover:text-white [&>button]:hover:bg-white/20 [&>button]:opacity-100">
+        <DialogHeader className="space-y-3">
+          <DialogTitle className="text-xl font-rubik-medium text-white flex items-center gap-2">
+            <ArrowRightLeft className="h-5 w-5 text-gray-400" />
             Transfer Funds
           </DialogTitle>
-          <DialogDescription className="text-gray-600">
-            Send funds instantly to another participant in this Lightning Node. Off-chain transfers
-            are instant and gasless.
+          <DialogDescription className="text-gray-400 text-sm leading-relaxed">
+            Send funds instantly to another participant. Instant and gasless.
           </DialogDescription>
         </DialogHeader>
 
         {!success ? (
           <div className="space-y-4 mt-4">
             {/* Current Balance */}
-            <div className="bg-blue-50 rounded-xl p-4 border border-blue-200">
-              <p className="text-xs text-blue-700 mb-1">Your Balance</p>
-              <p className="text-2xl font-rubik-medium text-blue-900">
-                {currentBalance} {lightningNode.token}
+            {/* Current Balance */}
+            <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
+              <p className="text-[10px] uppercase tracking-wider text-gray-500 font-medium mb-1">Your Balance</p>
+              <p className="text-xl font-rubik-medium text-white">
+                {currentBalance} <span className="text-sm text-gray-400 font-normal">{lightningNode.token}</span>
               </p>
             </div>
 
             {/* Recipient Selector */}
             <div className="space-y-2">
-              <Label htmlFor="recipient" className="text-gray-700">
+              <Label htmlFor="recipient" className="text-sm font-medium text-white">
                 Recipient
               </Label>
               <Select value={selectedRecipient} onValueChange={setSelectedRecipient}>
-                <SelectTrigger id="recipient" className="bg-white border-gray-300 text-gray-900">
+                <SelectTrigger id="recipient" className="bg-white/5 border-white/10 text-white rounded-xl h-10">
                   <SelectValue placeholder="Select recipient" />
                 </SelectTrigger>
-                <SelectContent className="bg-white text-gray-900">
+                <SelectContent className="bg-black/95 border-white/10 text-white backdrop-blur-xl">
                   {otherParticipants.map(participant => (
-                    <SelectItem key={participant.address} value={participant.address}>
-                      <div className="flex items-center justify-between gap-4">
-                        <span className="font-mono text-xs">
-                          {participant.address.slice(0, 6)}...{participant.address.slice(-4)}
+                    <SelectItem key={participant.address} value={participant.address} className="focus:bg-white/10 focus:text-white">
+                      <div className="flex flex-col gap-0.5">
+                        <span className="font-mono text-[10px]">
+                          {participant.address.slice(0, 10)}...{participant.address.slice(-8)}
                         </span>
-                        <span className="text-xs text-gray-500">
+                        <span className="text-[10px] text-gray-500">
                           Balance: {(Number(participant.balance) / 1e6).toFixed(2)}{' '}
                           {lightningNode.token}
                         </span>
@@ -219,19 +219,18 @@ export function TransferFundsModal({
                 </SelectContent>
               </Select>
               {selectedRecipientData && (
-                <p className="text-xs text-gray-500">
-                  Current balance:{' '}
-                  {(Number(selectedRecipientData.balance) / 1e6).toFixed(2)}{' '}
-                  {lightningNode.token}
+                <p className="text-[10px] text-gray-500 px-1">
+                  Available: {(Number(selectedRecipientData.balance) / 1e6).toFixed(2)} {lightningNode.token}
                 </p>
               )}
             </div>
 
             {/* Amount Input */}
-            <div className="space-y-2">
-              <Label htmlFor="amount" className="text-gray-700">
-                Amount
-              </Label>
+            <div className="space-y-3">
+              <div className="flex justify-between items-center px-1">
+                <Label htmlFor="amount" className="text-sm font-medium text-white">Amount</Label>
+                <span className="text-xs text-gray-500">Available: {currentBalance}</span>
+              </div>
               <Input
                 id="amount"
                 type="number"
@@ -241,48 +240,45 @@ export function TransferFundsModal({
                 step="0.01"
                 min="0"
                 max={currentBalance}
-                className="bg-white border-gray-300 text-gray-900 placeholder:text-gray-400"
+                className="bg-white/5 border-white/10 text-white placeholder:text-gray-600 focus:border-blue-500/50 focus:ring-blue-500/20 rounded-xl h-12 text-lg font-rubik-medium"
               />
-              <p className="text-xs text-gray-500">
-                Available: {currentBalance} {lightningNode.token}
-              </p>
             </div>
 
             {/* Error Message */}
             {error && (
-              <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm flex items-center gap-2">
-                <AlertCircle className="h-4 w-4 flex-shrink-0" />
-                {error}
+              <div className="flex items-center gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-200 text-xs">
+                <AlertCircle className="h-4 w-4 flex-shrink-0 text-red-400" />
+                <span>{error}</span>
               </div>
             )}
 
             {/* Info Message */}
-            <div className="bg-gray-50 border border-gray-200 text-gray-700 px-4 py-3 rounded-lg text-xs">
+            <div className="p-3 bg-white/5 border border-white/10 rounded-xl text-[10px] text-gray-400 leading-relaxed">
               <strong>Note:</strong> Transfers within a Lightning Node are instant and completely
               off-chain. No gas fees required!
             </div>
           </div>
         ) : (
           <div className="space-y-4 py-8">
-            <div className="flex items-center justify-center text-green-600">
+            <div className="flex items-center justify-center text-green-400">
               <CheckCircle2 className="h-12 w-12" />
             </div>
-            <p className="text-center font-medium text-gray-900">Transfer Successful!</p>
-            <p className="text-center text-sm text-gray-600">
+            <p className="text-center font-medium text-white">Transfer Successful!</p>
+            <p className="text-center text-sm text-gray-400">
               {amount} {lightningNode.token} transferred instantly
             </p>
           </div>
         )}
 
-        <DialogFooter>
+        <DialogFooter className="flex-col sm:flex-row gap-3 mt-4">
           {!success && (
             <>
               <Button
                 type="button"
-                variant="outline"
+                variant="ghost"
                 onClick={() => onOpenChange(false)}
                 disabled={loading}
-                className="text-gray-900 border-gray-300"
+                className="w-full sm:flex-1 text-gray-400 hover:text-white hover:bg-white/10 rounded-xl h-12"
               >
                 Cancel
               </Button>
@@ -290,16 +286,15 @@ export function TransferFundsModal({
                 type="button"
                 onClick={handleTransfer}
                 disabled={loading || !selectedRecipient || !amount}
-                className="bg-blue-600 hover:bg-blue-700 text-white"
+                className="w-full sm:flex-[2] bg-white text-black hover:bg-gray-200 transition-all rounded-xl h-12 font-medium"
               >
                 {loading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Transferring...
+                    Processing...
                   </>
                 ) : (
                   <>
-                    <ArrowRightLeft className="mr-2 h-4 w-4" />
                     Transfer
                   </>
                 )}
@@ -310,9 +305,9 @@ export function TransferFundsModal({
             <Button
               type="button"
               onClick={() => onOpenChange(false)}
-              className="w-full bg-black hover:bg-gray-800 text-white"
+              className="w-full bg-white text-black hover:bg-gray-200 transition-all rounded-xl h-12 font-medium"
             >
-              Close
+              Done
             </Button>
           )}
         </DialogFooter>

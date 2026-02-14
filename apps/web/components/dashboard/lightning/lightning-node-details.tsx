@@ -3,7 +3,7 @@
 import { QRCodeCanvas } from 'qrcode.react';
 
 import { useState, useEffect } from 'react';
-import { Loader2, Zap, Copy, ArrowRightLeft, Plus, Minus, Wallet, X, ChevronDown, ChevronUp } from 'lucide-react';
+import { Loader2, Zap, Copy, ArrowRightLeft, Plus, Minus, Wallet, X, ChevronDown, ChevronUp, QrCode } from 'lucide-react';
 import { Button } from '@repo/ui/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@repo/ui/components/ui/tooltip';
 import { lightningNodeApi, LightningNode, LightningNodeParticipant, walletApi } from '@/lib/api';
@@ -11,6 +11,7 @@ import { TransferFundsModal } from '../modals/transfer-funds-modal';
 import { DepositFundsModal } from '../modals/deposit-funds-modal';
 import { WithdrawFundsModal } from '../modals/withdraw-funds-modal';
 import { FundChannelModal } from '../modals/fund-channel-modal';
+import { LightningNodeQrModal } from '../modals/lightning-node-qr-modal';
 import { useAuth } from '@/hooks/useAuth';
 
 interface LightningNodeDetailsProps {
@@ -44,7 +45,7 @@ export function LightningNodeDetails({ lightningNodeId, onClose }: LightningNode
   const [withdrawModalOpen, setWithdrawModalOpen] = useState(false);
   const [showParticipants, setShowParticipants] = useState(true);
   const [showTransactions, setShowTransactions] = useState(false);
-  const [showQr, setShowQr] = useState(false);
+  const [qrModalOpen, setQrModalOpen] = useState(false);
 
   // Best-effort presence heartbeat for this node.
   useEffect(() => {
@@ -106,6 +107,45 @@ export function LightningNodeDetails({ lightningNodeId, onClose }: LightningNode
       setLoading(true);
       setError(null);
 
+      // Handle mock data for development
+      if (lightningNodeId === 'mock-node-1') {
+        const MOCK_NODE: LightningNode = {
+          id: 'mock-node-1',
+          userId: 'mock-user-1',
+          appSessionId: 'ln_session_mock_123',
+          uri: 'lightning://ln_session_mock_123@tempwallets.com',
+          chain: 'ethereum',
+          token: 'USDC',
+          status: 'open',
+          maxParticipants: 10,
+          quorum: 1,
+          protocol: 'NitroRPC/0.4',
+          challenge: 12345,
+          sessionData: null,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          closedAt: null,
+          participants: [
+            {
+              id: 'mock-participant-1',
+              address: '0x71C7656EC7ab88b098defB751B7401B5f6d8976F',
+              weight: 100,
+              balance: '500000000', // 500 USDC
+              asset: 'USDC',
+              status: 'joined',
+              joinedAt: new Date().toISOString(),
+              lastSeenAt: new Date().toISOString(),
+              leftAt: null,
+            },
+          ],
+        };
+        setTimeout(() => {
+          setLightningNode(MOCK_NODE);
+          setLoading(false);
+        }, 300); // Small delay for "realism"
+        return;
+      }
+
       try {
         const response = await lightningNodeApi.getLightningNodeById(lightningNodeId);
         if (response.ok && response.node) {
@@ -139,38 +179,6 @@ export function LightningNodeDetails({ lightningNodeId, onClose }: LightningNode
     }
   };
 
-  const handleCloseNode = async () => {
-    if (!lightningNode || !userId) return;
-
-    const confirmClose = window.confirm(
-      'Are you sure you want to close this Lightning Node? This will distribute all funds back to participants on-chain.'
-    );
-
-    if (!confirmClose) return;
-
-    try {
-      setLoading(true);
-      const response = await lightningNodeApi.closeLightningNode({
-        userId,
-        appSessionId: lightningNode.appSessionId,
-      });
-
-      if (response.ok) {
-        alert('Lightning Node closed successfully!');
-        // Refresh details
-        const updatedResponse = await lightningNodeApi.getLightningNodeById(lightningNodeId);
-        if (updatedResponse.ok && updatedResponse.node) {
-          setLightningNode(updatedResponse.node);
-        }
-      } else {
-        alert('Failed to close Lightning Node');
-      }
-    } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to close Lightning Node');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const refreshDetails = async () => {
     try {
@@ -219,68 +227,82 @@ export function LightningNodeDetails({ lightningNodeId, onClose }: LightningNode
   const participantCount = lightningNode.participants.length;
   const currentParticipant = lightningNode.participants.find(
     (p) => userAddressSet.has(p.address.toLowerCase())
-  );
+  ) || (lightningNode.id === 'mock-node-1' ? lightningNode.participants[0] : null);
   const myBalance = currentParticipant ? (Number(currentParticipant.balance) / 1e6).toFixed(2) : '0.00';
 
   return (
-    <>
+    <div className="bg-white rounded-3xl p-3 border border-gray-100 shadow-sm">
       <div className="space-y-4">
-        {/* Header */}
-        <div className="flex items-center justify-between">
+        {/* Network Bar Header */}
+        <div className="bg-gray-50 rounded-xl p-3 border border-gray-100 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="bg-gray-100 p-3 rounded-xl">
-              <Zap className="h-6 w-6 text-gray-700" />
+            <div className="bg-white p-2 rounded-lg border border-gray-100 shadow-sm">
+              <Zap className="h-5 w-5 text-gray-700 fill-gray-100" />
             </div>
             <div>
-              <h2 className="text-xl font-rubik-medium text-gray-900">
+              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Network</p>
+              <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-1.5">
                 {CHAIN_NAMES[lightningNode.chain] || lightningNode.chain}
+                <span className="text-gray-300">|</span>
+                {lightningNode.token}
               </h2>
-              <p className="text-sm text-gray-500">{lightningNode.token} Lightning Node</p>
             </div>
           </div>
-          {onClose && (
-            <button
-              onClick={onClose}
-              className="text-gray-400 hover:text-gray-600 transition-colors"
-            >
-              <X className="h-6 w-6" />
-            </button>
-          )}
+
+          <div className="flex items-center gap-2">
+            {/* QR Code Toggle */}
+            {lightningNode.status === 'open' && (
+              <TooltipProvider>
+                <Tooltip delayDuration={300}>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => setQrModalOpen(true)}
+                      className="p-2 rounded-lg transition-all border border-transparent hover:bg-white hover:border-gray-200 text-gray-500 hover:text-gray-700"
+                    >
+                      <QrCode className="h-5 w-5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Show QR Code</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+
+            {/* Close Button */}
+            {onClose && (
+              <button
+                onClick={onClose}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-white hover:border-gray-200 border border-transparent rounded-lg transition-all"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Status and Balance Cards */}
         <div className="grid grid-cols-2 gap-3">
-          <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
-            <p className="text-xs text-gray-700 mb-1">My Balance</p>
-            <p className="text-2xl font-rubik-medium text-gray-900">
-              {myBalance} {lightningNode.token}
+          <div className="bg-gray-50 rounded-xl p-4 border border-gray-100 overflow-hidden">
+            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">My Balance</p>
+            <p className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-900 tracking-tight whitespace-nowrap overflow-hidden text-ellipsis flex items-baseline gap-1.5">
+              <span>{myBalance}</span>
+              <span className="text-sm sm:text-base md:text-xl font-medium text-gray-500">{lightningNode.token}</span>
             </p>
           </div>
-          <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
-            <p className="text-xs text-gray-700 mb-1">Total Balance</p>
-            <p className="text-2xl font-rubik-medium text-gray-900">
-              {balanceHuman} {lightningNode.token}
+          <div className="bg-gray-50 rounded-xl p-4 border border-gray-100 overflow-hidden">
+            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Total Balance</p>
+            <p className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-900 tracking-tight whitespace-nowrap overflow-hidden text-ellipsis flex items-baseline gap-1.5">
+              <span>{balanceHuman}</span>
+              <span className="text-sm sm:text-base md:text-xl font-medium text-gray-500">{lightningNode.token}</span>
             </p>
           </div>
-        </div>
-
-        {/* Status Badge */}
-        <div className="flex items-center justify-between bg-white rounded-xl p-4 border border-gray-200">
-          <span className="text-sm text-gray-600">Status</span>
-          <span
-            className={`px-3 py-1 rounded-full text-xs font-medium ${lightningNode.status === 'open'
-              ? 'bg-gray-200 text-gray-800'
-              : 'bg-gray-100 text-gray-800'
-              }`}
-          >
-            {lightningNode.status === 'open' ? 'Open' : 'Closed'}
-          </span>
         </div>
 
         {/* Session ID */}
-        <div className="bg-white rounded-xl p-4 border border-gray-200">
+        <div className="bg-white rounded-xl p-4 border border-gray-100">
           <div className="flex items-center justify-between mb-2">
-            <p className="text-xs text-gray-500">Session ID</p>
+            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Session ID</p>
             <button
               onClick={handleCopySessionId}
               className="text-xs text-gray-700 hover:text-gray-900 flex items-center gap-1"
@@ -289,138 +311,55 @@ export function LightningNodeDetails({ lightningNodeId, onClose }: LightningNode
               {copiedId ? 'Copied!' : 'Copy'}
             </button>
           </div>
-          <p className="text-xs font-mono text-gray-700 break-all">{lightningNode.appSessionId}</p>
+          <p className="text-xs font-mono text-gray-500 break-all">{lightningNode.appSessionId}</p>
         </div>
 
-        {/* Share URI (if accepting participants) */}
-        {lightningNode.status === 'open' && participantCount < lightningNode.maxParticipants && (
-          <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-xs text-gray-700 font-medium">Share to add participants</p>
-              <button
-                onClick={handleCopyUri}
-                className="text-xs text-gray-700 hover:text-gray-900 flex items-center gap-1"
-              >
-                <Copy className="h-3 w-3" />
-                {copiedUri ? 'Copied!' : 'Copy URI'}
-              </button>
-            </div>
-            <p className="text-xs font-mono text-gray-700 break-all">{lightningNode.uri}</p>
-          </div>
-        )}
 
-        {/* QR Code Section */}
-        {lightningNode.status === 'open' && (
-          <div className="bg-white rounded-xl p-4 border border-gray-200">
-            <div className="flex items-center justify-between">
-              <p className="text-xs text-gray-700 font-medium">QR Code</p>
-              <button
-                onClick={() => setShowQr(!showQr)}
-                className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-900 px-3 py-1.5 rounded-lg transition-colors font-medium border border-gray-200"
-              >
-                {showQr ? 'Hide QR Code' : 'Show QR Code'}
-              </button>
-            </div>
 
-            {showQr && (
-              <div className="mt-4 flex flex-col items-center animate-in fade-in slide-in-from-top-2 duration-200">
-                <div className="bg-white p-3 rounded-xl border-2 border-gray-100 mb-4 shadow-sm">
-                  <QRCodeCanvas value={lightningNode.uri} size={180} level="H" />
-                </div>
+        {/* QR Code Modal handled by Header Icon */}
+        <LightningNodeQrModal
+          open={qrModalOpen}
+          onOpenChange={setQrModalOpen}
+          uri={lightningNode.uri}
+          chain={CHAIN_NAMES[lightningNode.chain] || lightningNode.chain}
+          token={lightningNode.token}
+        />
 
-                <div className="w-full bg-gray-50 rounded-xl p-3 border border-gray-200">
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-xs text-gray-500">Node URI</p>
-                    <button
-                      onClick={handleCopyUri}
-                      className="text-xs text-gray-700 hover:text-gray-900 flex items-center gap-1"
-                    >
-                      <Copy className="h-3 w-3" />
-                      {copiedUri ? 'Copied!' : 'Copy'}
-                    </button>
-                  </div>
-                  <p className="text-xs font-mono text-gray-500 break-all">{lightningNode.uri}</p>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Action Buttons – Coming Soon */}
+        {/* Action Buttons */}
         {lightningNode.status === 'open' && currentParticipant && (
-          <div className="space-y-3">
-            <TooltipProvider>
-              {/* Primary Actions: Deposit, Transfer, Withdraw */}
-              <div className="grid grid-cols-3 gap-3">
-                <Tooltip delayDuration={150}>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      disabled
-                      className="border-blue-200 text-blue-500 bg-blue-50 cursor-not-allowed opacity-80"
-                    >
-                      <Plus className="mr-2 h-4 w-4" />
-                      Deposit
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top" className="bg-black/80 text-white text-xs px-3 py-2 rounded-md border border-white/10 max-w-xs">
-                    <p>Coming soon: depositing additional funds into this Lightning Node will be available later.</p>
-                  </TooltipContent>
-                </Tooltip>
+          <div className="space-y-4">
+            <div className="grid grid-cols-3 gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setDepositModalOpen(true)}
+                className="border-blue-100/50 text-blue-600 bg-blue-50/30 hover:bg-blue-50 hover:border-blue-200 transition-all rounded-full h-10 text-xs font-medium"
+              >
+                <Plus className="mr-1.5 h-3.5 w-3.5" />
+                Deposit
+              </Button>
 
-                <Tooltip delayDuration={150}>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      className="bg-gray-300 text-gray-700 cursor-not-allowed opacity-80"
-                      disabled
-                    >
-                      <ArrowRightLeft className="mr-2 h-4 w-4" />
-                      Transfer
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top" className="bg-black/80 text-white text-xs px-3 py-2 rounded-md border border-white/10 max-w-xs">
-                    <p>Coming soon: transferring funds between participants is not yet available.</p>
-                  </TooltipContent>
-                </Tooltip>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setTransferModalOpen(true)}
+                className="border-gray-100/50 text-gray-600 bg-gray-50/30 hover:bg-gray-50 hover:border-gray-200 transition-all rounded-full h-10 text-xs font-medium"
+              >
+                <ArrowRightLeft className="mr-1.5 h-3.5 w-3.5" />
+                Transfer
+              </Button>
 
-                <Tooltip delayDuration={150}>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      disabled
-                      className="border-orange-200 text-orange-600 bg-orange-50 cursor-not-allowed opacity-80"
-                    >
-                      <Minus className="mr-2 h-4 w-4" />
-                      Withdraw
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top" className="bg-black/80 text-white text-xs px-3 py-2 rounded-md border border-white/10 max-w-xs">
-                    <p>Coming soon: withdrawing funds back to unified balance will be enabled in production soon.</p>
-                  </TooltipContent>
-                </Tooltip>
-              </div>
-            </TooltipProvider>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setWithdrawModalOpen(true)}
+                className="border-orange-100/50 text-orange-600 bg-orange-50/30 hover:bg-orange-50 hover:border-orange-200 transition-all rounded-full h-10 text-xs font-medium"
+              >
+                <Minus className="mr-1.5 h-3.5 w-3.5" />
+                Withdraw
+              </Button>
+            </div>
 
-            {/* Secondary Action: Close Node (still functional) */}
-            <Button
-              onClick={handleCloseNode}
-              variant="outline"
-              className="w-full text-gray-900 border-gray-300 hover:bg-gray-100"
-              disabled={loading}
-            >
-              {loading ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <X className="mr-2 h-4 w-4" />
-              )}
-              Close Node
-              <span className="ml-2 text-[10px] bg-gray-200 px-2 py-0.5 rounded-full">
-                Coming Soon
-              </span>
-            </Button>
           </div>
         )}
 
@@ -580,6 +519,6 @@ export function LightningNodeDetails({ lightningNodeId, onClose }: LightningNode
           />
         </>
       )}
-    </>
+    </div>
   );
 }

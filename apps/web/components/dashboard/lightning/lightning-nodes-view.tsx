@@ -168,132 +168,53 @@ function LightningNodeCard({
   onClick?: () => void;
   isInvitation?: boolean;
 }) {
-  const [copiedId, setCopiedId] = useState(false);
-  const [copiedUri, setCopiedUri] = useState(false);
-
-  const handleCopyChannelId = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    navigator.clipboard.writeText(node.appSessionId);
-    setCopiedId(true);
-    setTimeout(() => setCopiedId(false), 2000);
-  };
-
-  const handleCopyUri = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    navigator.clipboard.writeText(node.uri);
-    setCopiedUri(true);
-    setTimeout(() => setCopiedUri(false), 2000);
-  };
-
   const participantCount = node.participants.length;
   const totalBalance = node.participants.reduce((sum, p) => sum + BigInt(p.balance), BigInt(0));
   const balanceHuman = (Number(totalBalance) / 1e6).toFixed(2);
 
-  const statusColor = 'bg-gray-200 text-gray-800';
-
-  const statusText = {
-    open: 'Open',
-    closed: 'Closed',
-  }[node.status] || 'Unknown';
-
   return (
-    <div
-      className={`bg-white rounded-2xl p-4 space-y-3 border transition-colors cursor-pointer group ${isInvitation
-        ? 'border-gray-200 hover:border-gray-300'
-        : 'border-gray-200 hover:border-gray-300'
-        }`}
+    <button
       onClick={onClick}
+      className="w-full text-left group flex items-center justify-between p-2 bg-white rounded-xl border border-gray-100 hover:border-gray-200 hover:shadow-sm transition-all duration-200 cursor-pointer"
     >
-      {/* Header with Status */}
-      <div className="flex items-start justify-between">
-        <div className="flex items-center gap-2">
-          <div className="p-2 rounded-lg bg-gray-100">
-            {isInvitation ? (
-              <Mail className="h-5 w-5 text-gray-700" />
-            ) : (
-              <Zap className="h-5 w-5 text-gray-700" />
-            )}
-          </div>
-          <div>
-            <h3 className="font-rubik-medium text-gray-900">
-              {CHAIN_NAMES[node.chain] || node.chain}
-            </h3>
-            <p className="text-sm text-gray-500">{node.token}</p>
-          </div>
-        </div>
-        <div className="flex flex-col items-end gap-1">
-          <span className={`px-3 py-1 rounded-full text-xs font-medium ${statusColor}`}>
-            {statusText}
-          </span>
-          {isInvitation && (
-            <span className="text-xs text-gray-700 font-medium">New Invitation</span>
+      {/* Left side: Logo + Info */}
+      <div className="flex items-center gap-3">
+        {/* Icon with light background */}
+        <div className="relative flex items-center justify-center w-8 h-8 bg-gray-50 rounded-full border border-gray-50 group-hover:border-gray-100 transition-colors">
+          {isInvitation ? (
+            <Mail className="w-4 h-4 text-gray-700" />
+          ) : (
+            <Zap className="w-4 h-4 text-gray-700" />
           )}
         </div>
+
+        {/* Node Details */}
+        <div className="flex flex-col gap-0.5">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-gray-900 group-hover:text-black transition-colors">
+              {node.token}
+            </span>
+            {isInvitation && (
+              <span className="px-1.5 py-0.5 bg-blue-50 text-blue-600 text-[10px] font-medium rounded-md uppercase tracking-wider border border-blue-100">
+                New
+              </span>
+            )}
+          </div>
+          <span className="text-xs font-medium text-gray-500 flex items-center gap-1.5">
+            <span className="px-1.5 py-0.5 bg-gray-100 rounded text-[10px] uppercase tracking-wider text-gray-600">
+              {CHAIN_NAMES[node.chain] || node.chain}
+            </span>
+          </span>
+        </div>
       </div>
 
-      {/* Balance */}
-      <div className="bg-gray-50 rounded-xl p-3">
-        <p className="text-xs text-gray-500 mb-1">Total Channel Balance</p>
-        <p className="text-lg font-rubik-medium text-gray-900">
-          {balanceHuman} {node.token}
-        </p>
-      </div>
-
-      {/* Participants */}
-      <div className="flex items-center justify-between text-sm">
-        <span className="text-gray-600">Participants</span>
-        <span className="font-rubik-medium text-gray-900">
-          {participantCount} / {node.maxParticipants}
+      {/* Right side: Amount */}
+      <div className="flex flex-col items-end justify-center">
+        <span className="text-sm font-bold text-gray-900">
+          {balanceHuman} <span className="text-gray-400 font-medium">{node.token}</span>
         </span>
       </div>
-
-      {/* App Session ID */}
-      <div className="bg-gray-50 rounded-xl p-3">
-        <div className="flex items-center justify-between mb-1">
-          <p className="text-xs text-gray-500">Session ID</p>
-          <button
-            onClick={handleCopyChannelId}
-            className="text-xs text-gray-700 hover:text-gray-900 flex items-center gap-1"
-          >
-            <Copy className="h-3 w-3" />
-            {copiedId ? 'Copied!' : 'Copy'}
-          </button>
-        </div>
-        <p className="text-xs font-mono text-gray-700 break-all">
-          {node.appSessionId}
-        </p>
-      </div>
-
-      {/* Lightning URI (for sharing) */}
-      {node.status === 'open' && participantCount < node.maxParticipants && (
-        <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-xs text-gray-700 font-medium">Share this link</p>
-            <button
-              onClick={handleCopyUri}
-              className="text-xs text-gray-700 hover:text-gray-900 flex items-center gap-1"
-            >
-              <Copy className="h-3 w-3" />
-              {copiedUri ? 'Copied!' : 'Copy URI'}
-            </button>
-          </div>
-          <p className="text-xs font-mono text-gray-700 break-all">
-            {node.uri}
-          </p>
-        </div>
-      )}
-
-      {/* View Details */}
-      <div className="flex items-center justify-between">
-        <div className="text-xs text-gray-500">
-          Created {new Date(node.createdAt).toLocaleDateString()}
-        </div>
-        <div className="flex items-center gap-1 text-xs text-gray-700 group-hover:text-black">
-          <span>{isInvitation ? 'View Invitation' : 'View Details'}</span>
-          <ChevronRight className="h-3 w-3" />
-        </div>
-      </div>
-    </div>
+    </button>
   );
 }
 

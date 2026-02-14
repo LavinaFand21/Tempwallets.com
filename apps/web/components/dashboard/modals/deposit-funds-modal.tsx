@@ -141,32 +141,38 @@ export function DepositFundsModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[425px]">
-        <DialogHeader>
-          <DialogTitle>Deposit Funds</DialogTitle>
-          <DialogDescription>
-            Add funds to your Lightning Node from your unified balance. This operation is gasless.
+      <DialogContent className="border-white/10 bg-black/90 text-white shadow-2xl backdrop-blur w-full max-w-[360px] p-6 rounded-2xl [&>button]:text-white [&>button]:hover:text-white [&>button]:hover:bg-white/20 [&>button]:opacity-100">
+        <DialogHeader className="space-y-3">
+          <DialogTitle className="text-xl font-rubik-medium text-white flex items-center gap-2">
+            <Plus className="h-5 w-5 text-blue-400" />
+            Deposit Funds
+          </DialogTitle>
+          <DialogDescription className="text-gray-400 text-sm leading-relaxed">
+            Add funds from your unified balance. This operation is gasless and instant.
           </DialogDescription>
         </DialogHeader>
 
         {error && (
-          <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
-            <AlertCircle className="h-4 w-4 flex-shrink-0" />
+          <div className="flex items-center gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-200 text-xs">
+            <AlertCircle className="h-4 w-4 flex-shrink-0 text-red-400" />
             <span>{error}</span>
           </div>
         )}
 
         {success && (
-          <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm">
-            <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
+          <div className="flex items-center gap-2 p-3 bg-green-500/10 border border-green-500/20 rounded-xl text-green-200 text-xs">
+            <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-green-400" />
             <span>Funds deposited successfully!</span>
           </div>
         )}
 
         {!success && (
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="amount">Amount ({lightningNode.token})</Label>
+          <div className="space-y-5 py-2">
+            <div className="space-y-3">
+              <div className="flex justify-between items-center">
+                <Label htmlFor="amount" className="text-sm font-medium text-white">Amount</Label>
+                <span className="text-xs text-gray-400">{lightningNode.token}</span>
+              </div>
               <Input
                 id="amount"
                 type="number"
@@ -176,18 +182,15 @@ export function DepositFundsModal({
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
                 disabled={loading}
-                className="text-lg"
+                className="bg-white/5 border-white/10 text-white placeholder:text-gray-600 focus:border-blue-500/50 focus:ring-blue-500/20 rounded-xl h-12 text-lg font-rubik-medium"
               />
-              <p className="text-xs text-gray-500">
-                Funds will be moved from your unified balance to this Lightning Node
-              </p>
             </div>
 
             {currentParticipant && (
-              <div className="p-3 bg-gray-50 rounded-lg">
-                <p className="text-xs text-gray-600 mb-1">Current Balance</p>
-                <p className="text-lg font-medium text-gray-900">
-                  {(Number(currentParticipant.balance) / 1e6).toFixed(2)} {lightningNode.token}
+              <div className="p-4 bg-white/5 border border-white/10 rounded-2xl">
+                <p className="text-[10px] uppercase tracking-wider text-gray-500 font-medium mb-1">Available to Deposit</p>
+                <p className="text-xl font-rubik-medium text-white">
+                  {(Number(currentParticipant.balance) / 1e6).toFixed(2)} <span className="text-sm text-gray-400 font-normal">{lightningNode.token}</span>
                 </p>
               </div>
             )}
@@ -195,22 +198,22 @@ export function DepositFundsModal({
         )}
 
         {success && (
-          <div className="py-4">
-            <p className="text-sm text-gray-600 text-center">
+          <div className="py-6">
+            <p className="text-sm text-gray-400 text-center leading-relaxed">
               Your deposit has been processed. The Lightning Node balance will update shortly.
             </p>
           </div>
         )}
 
-        <DialogFooter>
+        <DialogFooter className="flex-col sm:flex-row gap-3 mt-4">
           {!success && (
             <>
               <Button
                 type="button"
-                variant="outline"
+                variant="ghost"
                 onClick={() => onOpenChange(false)}
                 disabled={loading}
-                className="text-gray-900 border-gray-300"
+                className="w-full sm:flex-1 text-gray-400 hover:text-white hover:bg-white/10 rounded-xl h-12"
               >
                 Cancel
               </Button>
@@ -218,16 +221,15 @@ export function DepositFundsModal({
                 type="button"
                 onClick={handleDeposit}
                 disabled={loading || !amount || parseFloat(amount) <= 0}
-                className="bg-blue-600 hover:bg-blue-700 text-white"
+                className="w-full sm:flex-[2] bg-white text-black hover:bg-gray-200 transition-all rounded-xl h-12 font-medium"
               >
                 {loading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Depositing...
+                    Processing...
                   </>
                 ) : (
                   <>
-                    <Plus className="mr-2 h-4 w-4" />
                     Deposit
                   </>
                 )}
@@ -238,9 +240,9 @@ export function DepositFundsModal({
             <Button
               type="button"
               onClick={() => onOpenChange(false)}
-              className="w-full bg-black hover:bg-gray-800 text-white"
+              className="w-full bg-white text-black hover:bg-gray-200 transition-all rounded-xl h-12 font-medium"
             >
-              Close
+              Done
             </Button>
           )}
         </DialogFooter>
