@@ -421,19 +421,13 @@ export class YellowNetworkAdapter
       throw new BadRequestException('Not authenticated with Yellow Network');
     }
 
+    // Pass participant directly to the RPC so Yellow Network filters server-side.
+    // Local post-filter on definition?.participants is unreliable because
+    // get_app_sessions list responses often omit the definition object.
     const sessions = await this.currentClient.getLightningNodes(
       filters.status || 'open',
+      filters.participant,
     );
-
-    // Filter by participant if specified
-    if (filters.participant) {
-      const normalized = filters.participant.toLowerCase();
-      return sessions.filter((s: any) =>
-        s.definition?.participants?.some(
-          (p: string) => p.toLowerCase() === normalized,
-        ),
-      ) as YellowSessionData[];
-    }
 
     return sessions as YellowSessionData[];
   }

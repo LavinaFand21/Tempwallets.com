@@ -65,10 +65,42 @@ export class CloseSessionUseCase {
       );
     }
 
-    // 6. Close session with Yellow Network (using current allocations)
+    // 6. Build COMPLETE allocations — every participant must be listed.
+    //    Yellow Network rejects close if any participant is missing
+    //    ("asset X not fully redistributed").
+    const allParticipants = session.definition.participants ?? [];
+    const assets = [
+      ...new Set(
+        (session.allocations ?? []).map((a: any) => a.asset).filter(Boolean),
+      ),
+    ];
+    // Default to 'usdc' if session has no allocations at all
+    if (assets.length === 0) assets.push('usdc');
+
+    const completeAllocations: Array<{
+      participant: string;
+      asset: string;
+      amount: string;
+    }> = [];
+    for (const asset of assets) {
+      for (const p of allParticipants) {
+        const existing = (session.allocations ?? []).find(
+          (a: any) =>
+            a.participant?.toLowerCase() === p.toLowerCase() &&
+            (a.asset ?? 'usdc') === asset,
+        );
+        completeAllocations.push({
+          participant: p,
+          asset,
+          amount: existing?.amount ?? '0',
+        });
+      }
+    }
+
+    // 7. Close session with Yellow Network
     await this.yellowNetwork.closeSession(
       dto.appSessionId,
-      session.allocations,
+      completeAllocations,
     );
 
     // 7. Return result

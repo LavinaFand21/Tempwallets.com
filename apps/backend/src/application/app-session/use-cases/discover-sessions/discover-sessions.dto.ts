@@ -18,6 +18,8 @@ export class DiscoverSessionsResultDto {
     appSessionId: string;
     status: 'open' | 'closed';
     version: number;
+    chain: string;
+    token: string;
     participants: string[];
     allocations: Array<{
       participant: string;

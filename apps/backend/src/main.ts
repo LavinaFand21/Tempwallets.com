@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module.js';
 import { ValidationPipe, LogLevel } from '@nestjs/common';
 import { TraceIdInterceptor } from './common/trace-id.interceptor.js';
+import { GlobalExceptionFilter } from './common/http-exception.filter.js';
 
 async function bootstrap() {
   // Configure logger based on environment
@@ -17,6 +18,9 @@ async function bootstrap() {
 
   // Add trace ID interceptor globally
   app.useGlobalInterceptors(new TraceIdInterceptor());
+
+  // Add global exception filter for user-friendly error messages
+  app.useGlobalFilters(new GlobalExceptionFilter());
 
   // Enable CORS with dynamic origins
   const allowedOrigins = [

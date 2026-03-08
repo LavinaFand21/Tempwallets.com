@@ -438,6 +438,25 @@
           "response": []
         },
         {
+          "name": "Check Available Balance (On-Chain Custody)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/custody/available-balance?userId={{userId}}&chain={{chain}}&asset={{asset}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["custody", "available-balance"],
+              "query": [
+                { "key": "userId", "value": "{{userId}}" },
+                { "key": "chain", "value": "{{chain}}" },
+                { "key": "asset", "value": "{{asset}}" }
+              ]
+            },
+            "description": "Read the on-chain available balance from the custody contract. This is funds deposited to custody that are NOT locked in any payment channel.\n\nBalance hierarchy:\n  On-Chain Wallet → [custody deposit] → Available Balance (here) → [fund channel] → Unified Balance → [app session] → Session Balance\n\nAfter closing a channel, funds return here before being withdrawn to wallet. No authentication required — this is a pure on-chain read."
+          },
+          "response": []
+        },
+        {
           "name": "Withdraw from Custody",
           "request": {
             "method": "POST",
@@ -456,7 +475,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["custody", "withdraw"]
             },
-            "description": "Withdraw USDC from custody contract back to wallet. This COSTS GAS. Decreases unified balance."
+            "description": "Withdraw USDC from custody contract back to wallet. This COSTS GAS. Must close channel first to move funds from unified balance to available balance, then withdraw here."
           },
           "response": []
         }
@@ -510,6 +529,29 @@
               ]
             },
             "description": "Get all payment channels for this user."
+          },
+          "response": []
+        },
+        {
+          "name": "Close Payment Channel",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"chain\": \"{{chain}}\",\n  \"channelId\": \"{{channelId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/channel/close",
+              "host": ["{{baseUrl}}"],
+              "path": ["channel", "close"]
+            },
+            "description": "Close a 2-party payment channel cooperatively with the clearnode. Calls close_channel RPC then submits Custody.close() on-chain. Moves funds from Unified Balance → Available Balance in the custody contract.\n\nSet {{channelId}} to the channel ID from Fund Payment Channel. After closing, use Check Available Balance to verify funds returned, then Withdraw from Custody to send to wallet."
           },
           "response": []
         }

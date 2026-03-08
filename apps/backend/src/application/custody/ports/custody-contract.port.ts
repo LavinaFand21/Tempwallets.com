@@ -49,6 +49,17 @@ export interface ICustodyContractPort {
   getUnifiedBalance(userAddress: string, asset: string): Promise<string>;
 
   /**
+   * Get available balance from custody contract (on-chain).
+   * This is the amount NOT locked in any channel — free to withdraw.
+   * Uses getAccountsBalances(accounts[], tokens[]) view function.
+   */
+  getAvailableBalance(
+    userAddress: string,
+    tokenAddress: string,
+    chainId: number,
+  ): Promise<string>;
+
+  /**
    * Trigger the "bring funds into ledger" step.
    *
    * This MUST NOT deposit from the user's wallet again.

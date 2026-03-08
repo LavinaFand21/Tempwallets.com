@@ -6,8 +6,6 @@ import { BalanceView } from './balance-view';
 import { TransactionList } from '../transactions/transaction-list';
 import { LightningNodesView } from '../lightning/lightning-nodes-view';
 import { useWalletData } from '@/hooks/useWalletData';
-import { LightningNodesProvider } from '@/hooks/lightning-nodes-context';
-import { useLightningNodes } from '@/hooks/useLightningNodes';
 
 type ViewType = 'balance' | 'transactions' | 'lightningNodes';
 
@@ -25,16 +23,15 @@ interface BalanceTransactionsToggleProps {
 export function BalanceTransactionsToggle({ onOpenSend, selectedChainId }: BalanceTransactionsToggleProps) {
   const [activeView, setActiveView] = useState<ViewType>('balance');
   const { loading, refreshBalances, refreshTransactions } = useWalletData();
-  const { loading: lightningLoading, refreshNodes } = useLightningNodes();
-  const isLoading = loading.balances || loading.transactions || lightningLoading;
+  // Lightning Nodes view manages its own loading/refresh state internally
+  const isLoading = loading.balances || loading.transactions;
   const handleRefresh = () => {
     if (activeView === 'balance') {
       refreshBalances();
     } else if (activeView === 'transactions') {
       refreshTransactions();
-    } else if (activeView === 'lightningNodes') {
-      refreshNodes();
     }
+    // Lightning Nodes view has its own per-section refresh controls
   };
   return (
     <div className="w-full bg-white rounded-3xl pt-4 border-t border-gray-200 shadow-sm md:max-w-2xl md:mx-auto mt-2 mb-4 flex-1 flex flex-col">
@@ -106,9 +103,7 @@ export function BalanceTransactionsToggle({ onOpenSend, selectedChainId }: Balan
         ) : activeView === 'transactions' ? (
           <TransactionList />
         ) : (
-          <LightningNodesProvider>
-            <LightningNodesView />
-          </LightningNodesProvider>
+          <LightningNodesView />
         )}
       </div>
     </div>

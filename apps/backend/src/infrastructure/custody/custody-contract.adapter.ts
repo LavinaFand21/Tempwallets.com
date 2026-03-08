@@ -58,6 +58,18 @@ const CUSTODY_ABI = [
     ],
     outputs: [],
   },
+  {
+    // Returns available (unlocked) balance per account per token.
+    // result[i][j] = balance of accounts[i] for tokens[j]
+    name: 'getAccountsBalances',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [
+      { name: 'accounts', type: 'address[]' },
+      { name: 'tokens', type: 'address[]' },
+    ],
+    outputs: [{ name: '', type: 'uint256[][]' }],
+  },
 ] as const;
 
 // Custody contract addresses (Yellow Network - from yellow-sdk-tutorials)
@@ -188,6 +200,7 @@ export class CustodyContractAdapter implements ICustodyContractPort {
 
     // Custody withdraw ABI — matches @erc7824/nitrolite SDK
     // withdraw(token, amount) — 2 parameters; recipient is implicit msg.sender
+    // Include the InsufficientBalance error so viem can decode reverts.
     const CUSTODY_WITHDRAW_ABI = [
       {
         name: 'withdraw',
@@ -199,26 +212,105 @@ export class CustodyContractAdapter implements ICustodyContractPort {
         ],
         outputs: [],
       },
+      {
+        name: 'InsufficientBalance',
+        type: 'error',
+        inputs: [
+          { name: 'available', type: 'uint256' },
+          { name: 'requested', type: 'uint256' },
+        ],
+      },
     ] as const;
 
-    const hash = await walletClient.writeContract({
-      address: custodyAddress,
-      abi: CUSTODY_WITHDRAW_ABI,
-      functionName: 'withdraw',
-      args: [tokenAddress as Address, amount],
-    });
+    try {
+      const hash = await walletClient.writeContract({
+        address: custodyAddress,
+        abi: CUSTODY_WITHDRAW_ABI,
+        functionName: 'withdraw',
+        args: [tokenAddress as Address, amount],
+      });
 
-    console.log(`✅ Withdraw transaction: ${hash}`);
+      console.log(`Withdraw transaction: ${hash}`);
+
+      const publicClient = createPublicClient({
+        chain,
+        transport: http(),
+      });
+
+      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      console.log(`Withdraw confirmed in block ${receipt.blockNumber}`);
+
+      return hash;
+    } catch (err: any) {
+      // Decode InsufficientBalance revert into a human-readable error
+      const raw = err?.cause?.raw ?? err?.raw ?? '';
+      const sig = typeof raw === 'string' ? raw.slice(0, 10) : '';
+      // InsufficientBalance(uint256,uint256) selector = 0xcf479181
+      if (sig === '0xcf479181' || err?.cause?.signature === '0xcf479181') {
+        // Parse available/requested from revert data
+        const decimals = 6;
+        let availHuman = '?';
+        let reqHuman = '?';
+        try {
+          const data = typeof raw === 'string' ? raw : '';
+          // Remove selector (10 chars = 0x + 8 hex), each uint256 is 64 hex
+          const availHex = data.slice(10, 74);
+          const reqHex = data.slice(74, 138);
+          if (availHex) availHuman = (parseInt(availHex, 16) / 10 ** decimals).toFixed(decimals);
+          if (reqHex) reqHuman = (parseInt(reqHex, 16) / 10 ** decimals).toFixed(decimals);
+        } catch { /* use defaults */ }
+        throw new BadRequestException(
+          `Insufficient custody balance. Available: ${availHuman}, requested: ${reqHuman}. ` +
+          `You can only withdraw funds that are in the custody contract (not locked in channels).`,
+        );
+      }
+      // Re-throw other errors with a cleaner message
+      const msg = err?.shortMessage || err?.message || String(err);
+      if (msg.includes('revert')) {
+        throw new BadRequestException(
+          `Custody withdraw reverted on-chain. Ensure you have sufficient available balance. ` +
+          `Close any open channels first to unlock funds.`,
+        );
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Get available (unlocked) balance from the custody contract (ON-CHAIN).
+   * Uses getAccountsBalances(accounts[], tokens[]) view function.
+   * Returns the amount NOT currently locked in any payment channel.
+   */
+  async getAvailableBalance(
+    userAddress: string,
+    tokenAddress: string,
+    chainId: number,
+  ): Promise<string> {
+    const chain = this.getChain(chainId);
+    const custodyAddress = this.getCustodyAddress(chainId);
 
     const publicClient = createPublicClient({
       chain,
       transport: http(),
     });
 
-    const receipt = await publicClient.waitForTransactionReceipt({ hash });
-    console.log(`✅ Withdraw confirmed in block ${receipt.blockNumber}`);
+    // getAccountsBalances([[userAddress]], [tokenAddress]) → uint256[][]
+    // result[0][0] = balance of userAddress for tokenAddress
+    const result = await publicClient.readContract({
+      address: custodyAddress,
+      abi: CUSTODY_ABI,
+      functionName: 'getAccountsBalances',
+      args: [[userAddress as Address], [tokenAddress as Address]],
+    });
 
-    return hash;
+    // result is uint256[][] — result[0][0] is the balance (raw, 6 decimals for USDC)
+    const rawBalance: bigint = (result as bigint[][])[0]?.[0] ?? BigInt(0);
+    const decimals = 6;
+    const humanBalance = (Number(rawBalance) / Math.pow(10, decimals)).toFixed(decimals);
+
+    console.log(`[CustodyContractAdapter] Available balance for ${userAddress}: ${rawBalance} raw → ${humanBalance}`);
+
+    return humanBalance;
   }
 
   /**

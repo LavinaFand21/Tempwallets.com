@@ -4,23 +4,19 @@
  * Presentation Layer - HTTP Adapter
  *
  * Thin controller that adapts HTTP requests to use case calls.
- * Follows Clean Architecture principles:
- * - Controllers are thin (5-20 lines per method)
- * - Only validate, convert DTOs, call use case, return response
- * - NO business logic in controllers
  *
- * Simplified from current implementation:
- * - 7 endpoints instead of 11 (removed join, split fund-channel)
- * - Clear naming (no confusing fund-channel/deposit)
- * - Follows Yellow Network's actual flow
+ * IMPORTANT: Route order matters! NestJS matches routes top-to-bottom.
+ * Static/specific segments (e.g. "discover") MUST come before generic
+ * parameter segments (":sessionId") to avoid mis-matching.
  *
  * Endpoint Map:
- * POST   /app-session/authenticate     → Authenticate wallet with Yellow Network
- * POST   /app-session                  → Create new app session
- * GET    /app-session/:sessionId       → Query specific session
- * GET    /app-session/discover/:userId → Discover user's sessions
- * PATCH  /app-session/:sessionId       → Update allocations (deposit/transfer/withdraw)
- * DELETE /app-session/:sessionId       → Close session
+ * POST   /app-session/authenticate        -> Authenticate wallet with Yellow Network
+ * POST   /app-session                     -> Create new app session
+ * GET    /app-session/discover/:userId    -> Discover user's sessions
+ * GET    /app-session/:sessionId/balances -> Session balances
+ * GET    /app-session/:sessionId          -> Query specific session
+ * PATCH  /app-session/:sessionId          -> Update allocations (deposit/transfer/withdraw)
+ * DELETE /app-session/:sessionId          -> Close session
  */
 
 import {
@@ -127,59 +123,10 @@ export class AppSessionController {
     };
   }
 
-  /**
-   * GET /app-session/:sessionId
-   *
-   * Query a specific app session.
-   * User must be a participant.
-   */
-  @Get(':sessionId')
-  async querySession(
-    @Param('sessionId') sessionId: string,
-    @Query('userId') userId: string,
-    @Query('chain') chain: string,
-  ) {
-    const result = await this.querySessionUseCase.execute({
-      userId,
-      sessionId,
-      chain,
-    });
-
-    return {
-      ok: true,
-      session: result,
-    };
-  }
-
-  /**
-   * GET /app-session/:sessionId/balances
-   *
-   * Get the current balances/allocations within a specific app session.
-   * Uses Yellow Network's get_ledger_balances with app_session_id as account_id.
-   *
-   * This tells you how much of each asset is currently in the session.
-   */
-  @Get(':sessionId/balances')
-  async getSessionBalances(
-    @Param('sessionId') sessionId: string,
-    @Query('userId') userId: string,
-    @Query('chain') chain: string,
-  ) {
-    // Authenticate
-    const walletAddress = await this.authenticateWalletUseCase.execute({
-      userId,
-      chain,
-    });
-
-    // Get balances for the app session
-    const balances = await this.yellowNetwork.getAppSessionBalances(sessionId);
-
-    return {
-      ok: true,
-      appSessionId: sessionId,
-      balances,
-    };
-  }
+  // ────────────────────────────────────────────────────────────────────────
+  // IMPORTANT: "discover/:userId" MUST be declared BEFORE ":sessionId"
+  // otherwise NestJS treats "discover" as a sessionId parameter.
+  // ────────────────────────────────────────────────────────────────────────
 
   /**
    * GET /app-session/discover/:userId
@@ -203,6 +150,66 @@ export class AppSessionController {
       ok: true,
       sessions: result.sessions,
       count: result.count,
+    };
+  }
+
+  /**
+   * GET /app-session/:sessionId/balances
+   *
+   * Get the current balances/allocations within a specific app session.
+   * Uses Yellow Network's get_ledger_balances with app_session_id as account_id.
+   *
+   * This tells you how much of each asset is currently in the session.
+   *
+   * NOTE: Must be declared before GET :sessionId to avoid route collision.
+   */
+  @Get(':sessionId/balances')
+  async getSessionBalances(
+    @Param('sessionId') sessionId: string,
+    @Query('userId') userId: string,
+    @Query('chain') chain: string,
+  ) {
+    // Authenticate
+    await this.authenticateWalletUseCase.execute({
+      userId,
+      chain,
+    });
+
+    // Get balances for the app session
+    const balances = await this.yellowNetwork.getAppSessionBalances(sessionId);
+
+    return {
+      ok: true,
+      appSessionId: sessionId,
+      data: { balances },
+      balances,
+    };
+  }
+
+  /**
+   * GET /app-session/:sessionId
+   *
+   * Query a specific app session.
+   * User must be a participant.
+   */
+  @Get(':sessionId')
+  async querySession(
+    @Param('sessionId') sessionId: string,
+    @Query('userId') userId: string,
+    @Query('chain') chain: string,
+  ) {
+    const result = await this.querySessionUseCase.execute({
+      userId,
+      sessionId,
+      chain,
+    });
+
+    // Return session data both as top-level `session` and as `data` for
+    // frontend compatibility (yellowApi checks res.data ?? res.session).
+    return {
+      ok: true,
+      data: result,
+      session: result,
     };
   }
 

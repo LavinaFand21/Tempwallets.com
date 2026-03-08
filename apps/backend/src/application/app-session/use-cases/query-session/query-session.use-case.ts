@@ -58,13 +58,20 @@ export class QuerySessionUseCase {
       );
     }
 
-    // 5. Return session data
+    // 5. Return session data — include top-level participants, chain, and token
+    //    so the frontend AppSession type is fully populated.
+    const allocations = session.allocations ?? [];
+    const token = allocations.find((a) => a.asset)?.asset ?? '';
+
     return {
       appSessionId: session.app_session_id,
       status: session.status,
       version: session.version,
+      chain: dto.chain,
+      token,
+      participants: session.definition.participants,
       definition: session.definition,
-      allocations: session.allocations,
+      allocations,
       sessionData: session.session_data,
     };
   }

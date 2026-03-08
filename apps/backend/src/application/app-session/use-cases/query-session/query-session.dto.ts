@@ -17,6 +17,9 @@ export class QuerySessionResultDto {
   appSessionId!: string;
   status!: 'open' | 'closed';
   version!: number;
+  chain!: string;
+  token!: string;
+  participants!: string[];
   definition!: {
     protocol: string;
     participants: string[];

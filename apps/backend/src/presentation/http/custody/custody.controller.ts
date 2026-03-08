@@ -38,6 +38,8 @@ import type { IYellowNetworkPort } from '../../../application/app-session/ports/
 import { YELLOW_NETWORK_PORT } from '../../../application/app-session/ports/yellow-network.port.js';
 import type { IWalletProviderPort } from '../../../application/app-session/ports/wallet-provider.port.js';
 import { WALLET_PROVIDER_PORT } from '../../../application/app-session/ports/wallet-provider.port.js';
+import type { ICustodyContractPort } from '../../../application/custody/ports/custody-contract.port.js';
+import { CUSTODY_CONTRACT_PORT } from '../../../application/custody/ports/custody-contract.port.js';
 
 @Controller('custody')
 export class CustodyController {
@@ -48,6 +50,8 @@ export class CustodyController {
     private readonly yellowNetwork: IYellowNetworkPort,
     @Inject(WALLET_PROVIDER_PORT)
     private readonly walletProvider: IWalletProviderPort,
+    @Inject(CUSTODY_CONTRACT_PORT)
+    private readonly custodyContract: ICustodyContractPort,
   ) {}
 
   /**
@@ -89,14 +93,6 @@ export class CustodyController {
   }
 
   /**
-   * GET /custody/balance
-   *
-   * Returns off-chain unified balance (Yellow Network ledger balances).
-   *
-   * IMPORTANT: Yellow ledger is only queryable after authenticating:
-   * POST /app-session/authenticate
-   */
-  /**
    * POST /custody/withdraw
    *
    * Withdraw funds from custody contract back to user's wallet.
@@ -130,6 +126,81 @@ export class CustodyController {
     };
   }
 
+  /**
+   * GET /custody/available-balance
+   *
+   * Returns the on-chain available (unlocked) balance in the custody contract.
+   * This is funds deposited to custody that are NOT locked in any payment channel.
+   * Reads directly from the custody contract — no Yellow Network auth needed.
+   *
+   * Balance tiers:
+   *   Wallet → [deposit] → Available Balance → [fund channel] → Unified Balance → [app session] → Session Balance
+   *   Available Balance ← [withdraw] ← Unified Balance ← [close channel] ← (after close_app_session)
+   */
+  @Get('available-balance')
+  @HttpCode(HttpStatus.OK)
+  async getAvailableBalance(
+    @Query('userId') userId: string,
+    @Query('chain') chain: string,
+    @Query('asset') asset: string,
+  ) {
+    const chainIdMap: Record<string, number> = {
+      ethereum: 1,
+      base: 8453,
+      arbitrum: 42161,
+      avalanche: 43114,
+    };
+    const tokenAddressMap: Record<string, Record<string, string>> = {
+      base: {
+        usdc: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+        usdt: '0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2',
+      },
+      arbitrum: {
+        usdc: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+        usdt: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
+      },
+      ethereum: {
+        usdc: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+        usdt: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+      },
+      avalanche: {
+        usdc: '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E',
+        usdt: '0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7',
+      },
+    };
+
+    const chainId = chainIdMap[chain.toLowerCase()];
+    const tokenAddress = tokenAddressMap[chain.toLowerCase()]?.[asset.toLowerCase()];
+
+    if (!chainId || !tokenAddress) {
+      return { ok: false, error: `Unsupported chain/asset: ${chain}/${asset}` };
+    }
+
+    const walletAddress = await this.walletProvider.getWalletAddress(userId, chain);
+    const balance = await this.custodyContract.getAvailableBalance(
+      walletAddress,
+      tokenAddress,
+      chainId,
+    );
+
+    return {
+      ok: true,
+      data: {
+        accountId: walletAddress,
+        chain,
+        asset: asset.toLowerCase(),
+        availableBalance: balance,
+        description: 'On-chain custody contract balance (not locked in any channel)',
+      },
+    };
+  }
+
+  /**
+   * GET /custody/balance
+   *
+   * Returns off-chain unified balance (Yellow Network ledger balances).
+   * Requires prior authentication via POST /app-session/authenticate.
+   */
   @Get('balance')
   @HttpCode(HttpStatus.OK)
   async getUnifiedBalance(

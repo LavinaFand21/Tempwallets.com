@@ -53,15 +53,23 @@ export class DiscoverSessionsUseCase {
       status: dto.status,
     });
 
-    // 4. Return simplified result
+    // 4. Return enriched result — include chain from the request and
+    //    derive token from allocations so the frontend can display them.
     return {
-      sessions: sessions.map((s) => ({
-        appSessionId: s.app_session_id,
-        status: s.status,
-        version: s.version,
-        participants: s.definition.participants,
-        allocations: s.allocations,
-      })),
+      sessions: sessions.map((s) => {
+        const allocations = s.allocations ?? [];
+        // Token is the first non-empty asset from allocations
+        const token = allocations.find((a) => a.asset)?.asset ?? '';
+        return {
+          appSessionId: s.app_session_id,
+          status: s.status,
+          version: s.version,
+          chain: dto.chain,
+          token,
+          participants: s.definition?.participants ?? [],
+          allocations,
+        };
+      }),
       count: sessions.length,
     };
   }
