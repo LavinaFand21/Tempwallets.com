@@ -97,13 +97,23 @@ export class CustodyContractAdapter implements ICustodyContractPort {
     const account = privateKeyToAccount(userPrivateKey as `0x${string}`);
     const chain = this.getChain(chainId);
 
+    const publicClient = createPublicClient({
+      chain,
+      transport: http(),
+    });
+
     const walletClient = createWalletClient({
       account,
       chain,
       transport: http(),
     });
 
-    console.log(`Approving ${amount} tokens for custody contract...`);
+    const nonce = await publicClient.getTransactionCount({
+      address: account.address,
+      blockTag: 'pending',
+    });
+
+    console.log(`Approving ${amount} tokens for custody contract (nonce: ${nonce})...`);
 
     const custodyAddress = this.getCustodyAddress(chainId);
 
@@ -112,15 +122,10 @@ export class CustodyContractAdapter implements ICustodyContractPort {
       abi: ERC20_ABI,
       functionName: 'approve',
       args: [custodyAddress, amount],
+      nonce,
     });
 
     console.log(`✅ Approval transaction: ${hash}`);
-
-    // Wait for confirmation
-    const publicClient = createPublicClient({
-      chain,
-      transport: http(),
-    });
 
     await publicClient.waitForTransactionReceipt({ hash });
     console.log(`✅ Approval confirmed`);
@@ -130,7 +135,11 @@ export class CustodyContractAdapter implements ICustodyContractPort {
 
   /**
    * Deposit to custody contract (THE CRITICAL STEP!)
-   * This emits DepositEvent that Yellow Network indexes
+   * This emits DepositEvent that Yellow Network indexes.
+   *
+   * Fetches the nonce explicitly before submitting to avoid stale-nonce errors
+   * that occur when the approve and deposit wallet clients hit different RPC
+   * nodes (load balancers) that haven't yet synced the confirmed approve tx.
    */
   async deposit(params: DepositParams): Promise<string> {
     const { userPrivateKey, chainId, tokenAddress, amount, userAddress } =
@@ -139,13 +148,27 @@ export class CustodyContractAdapter implements ICustodyContractPort {
     const account = privateKeyToAccount(userPrivateKey as `0x${string}`);
     const chain = this.getChain(chainId);
 
+    // Use a single publicClient for both nonce fetching and receipt waiting.
+    const publicClient = createPublicClient({
+      chain,
+      transport: http(),
+    });
+
     const walletClient = createWalletClient({
       account,
       chain,
       transport: http(),
     });
 
-    console.log(`Depositing ${amount} tokens to custody contract...`);
+    // Fetch the latest confirmed nonce so we don't collide with the approve tx.
+    // Using 'pending' ensures we get the correct nonce even if the approve tx
+    // was submitted seconds ago and is still propagating.
+    const nonce = await publicClient.getTransactionCount({
+      address: account.address,
+      blockTag: 'pending',
+    });
+
+    console.log(`Depositing ${amount} tokens to custody contract (nonce: ${nonce})...`);
 
     const custodyAddress = this.getCustodyAddress(chainId);
 
@@ -158,15 +181,10 @@ export class CustodyContractAdapter implements ICustodyContractPort {
         tokenAddress as Address, // token (ERC20 to deposit)
         amount, // amount in token's smallest units
       ],
+      nonce,
     });
 
     console.log(`✅ Deposit transaction: ${hash}`);
-
-    // Wait for confirmation
-    const publicClient = createPublicClient({
-      chain,
-      transport: http(),
-    });
 
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
     console.log(`✅ Deposit confirmed in block ${receipt.blockNumber}`);
