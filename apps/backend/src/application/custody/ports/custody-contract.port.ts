@@ -38,6 +38,18 @@ export interface ICustodyContractPort {
   deposit(params: DepositParams): Promise<string>;
 
   /**
+   * Approve + Deposit in a single atomic flow.
+   *
+   * Fetches the account nonce once and submits approve (nonce N) then
+   * deposit (nonce N+1) sequentially using the same client — avoids the
+   * "nonce too low" race that occurs when two separate calls each query the
+   * nonce from load-balanced RPC nodes that may not be in sync.
+   *
+   * Returns { approveTxHash, depositTxHash }
+   */
+  approveAndDeposit(params: DepositParams): Promise<{ approveTxHash: string; depositTxHash: string }>;
+
+  /**
    * Withdraw funds from custody contract back to wallet
    * This is an on-chain transaction
    */

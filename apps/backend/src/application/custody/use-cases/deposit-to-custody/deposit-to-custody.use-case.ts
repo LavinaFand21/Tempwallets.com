@@ -121,25 +121,16 @@ export class DepositToCustodyUseCase {
     console.log(`Chain ID: ${chainId}`);
     console.log(`Token address: ${tokenAddress}`);
 
-    // 4. Step 1: Approve USDC for custody contract (ON-CHAIN)
-    console.log(`\n--- Step 1: Approve USDC ---`);
-    const approveTxHash = await this.custodyContract.approveToken({
-      userPrivateKey,
-      userAddress,
-      chainId,
-      tokenAddress,
-      amount: amountInSmallestUnits,
-    });
-
-    // 5. Step 2: Deposit to custody contract (ON-CHAIN - THE CRITICAL STEP!)
-    console.log(`\n--- Step 2: Deposit to Custody ---`);
-    const depositTxHash = await this.custodyContract.deposit({
-      userPrivateKey,
-      userAddress,
-      chainId,
-      tokenAddress,
-      amount: amountInSmallestUnits,
-    });
+    // 4+5. Approve + Deposit in one atomic call (avoids nonce race across RPC nodes)
+    console.log(`\n--- Step 1+2: Approve & Deposit ---`);
+    const { approveTxHash, depositTxHash } =
+      await this.custodyContract.approveAndDeposit({
+        userPrivateKey,
+        userAddress,
+        chainId,
+        tokenAddress,
+        amount: amountInSmallestUnits,
+      });
 
     // 6. Step 3: Wait for Yellow Network to index deposit
     console.log(`\n--- Step 3: Waiting for Yellow Network Indexing ---`);

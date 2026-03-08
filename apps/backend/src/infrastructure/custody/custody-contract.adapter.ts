@@ -196,6 +196,77 @@ export class CustodyContractAdapter implements ICustodyContractPort {
   }
 
   /**
+   * Approve + Deposit in a single atomic flow.
+   *
+   * Fetches the nonce ONCE from the RPC node, then submits:
+   *   - approve  with nonce N   (broadcast immediately)
+   *   - deposit  with nonce N+1 (broadcast immediately after)
+   *
+   * Both transactions are broadcast before waiting for either to confirm,
+   * so there's no window for a load-balanced RPC node to return a stale nonce.
+   */
+  async approveAndDeposit(
+    params: DepositParams,
+  ): Promise<{ approveTxHash: string; depositTxHash: string }> {
+    const { userPrivateKey, chainId, tokenAddress, amount, userAddress } =
+      params;
+
+    const account = privateKeyToAccount(userPrivateKey as `0x${string}`);
+    const chain = this.getChain(chainId);
+    const custodyAddress = this.getCustodyAddress(chainId);
+
+    // Single publicClient for all RPC reads and receipt waits
+    const publicClient = createPublicClient({ chain, transport: http() });
+    const walletClient = createWalletClient({ account, chain, transport: http() });
+
+    // Fetch nonce once — all subsequent txs use explicit sequential nonces
+    const baseNonce = await publicClient.getTransactionCount({
+      address: account.address,
+      blockTag: 'pending',
+    });
+
+    console.log(`[approveAndDeposit] Base nonce: ${baseNonce}`);
+
+    // --- approve (nonce N) ---
+    console.log(`Approving ${amount} tokens for custody contract (nonce: ${baseNonce})...`);
+    const approveHash = await walletClient.writeContract({
+      address: tokenAddress as Address,
+      abi: ERC20_ABI,
+      functionName: 'approve',
+      args: [custodyAddress, amount],
+      nonce: baseNonce,
+    });
+    console.log(`✅ Approval submitted: ${approveHash}`);
+
+    // --- deposit (nonce N+1, broadcast immediately — no need to wait for approve) ---
+    const depositNonce = baseNonce + 1;
+    console.log(`Depositing ${amount} tokens to custody contract (nonce: ${depositNonce})...`);
+    const depositHash = await walletClient.writeContract({
+      address: custodyAddress,
+      abi: CUSTODY_ABI,
+      functionName: 'deposit',
+      args: [
+        userAddress as Address,
+        tokenAddress as Address,
+        amount,
+      ],
+      nonce: depositNonce,
+    });
+    console.log(`✅ Deposit submitted: ${depositHash}`);
+
+    // Wait for both transactions to be confirmed (in order)
+    console.log(`Waiting for approval confirmation...`);
+    await publicClient.waitForTransactionReceipt({ hash: approveHash });
+    console.log(`✅ Approval confirmed`);
+
+    console.log(`Waiting for deposit confirmation...`);
+    const depositReceipt = await publicClient.waitForTransactionReceipt({ hash: depositHash });
+    console.log(`✅ Deposit confirmed in block ${depositReceipt.blockNumber}`);
+
+    return { approveTxHash: approveHash, depositTxHash: depositHash };
+  }
+
+  /**
    * Withdraw from custody contract back to wallet (ON-CHAIN)
    * This reduces unified balance and returns funds to user
    */
