@@ -20,6 +20,8 @@ export class DepositToCustodyResultDto {
   success!: boolean;
   approveTxHash!: string;
   depositTxHash!: string;
+  /** The payment channel used to credit the unified balance (needed for channel/close) */
+  channelId?: string;
   chainId!: number;
   amount!: string;
   asset!: string;

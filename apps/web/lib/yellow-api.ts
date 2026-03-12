@@ -137,6 +137,14 @@ export interface CustodyTxResponse {
   ok: boolean;
   txHash?: string;
   message?: string;
+  /** Deposit response wraps result in `data` */
+  data?: {
+    channelId?: string;
+    approveTxHash?: string;
+    depositTxHash?: string;
+    unifiedBalance?: string;
+    [key: string]: unknown;
+  };
 }
 
 export interface ChannelFundResponse {

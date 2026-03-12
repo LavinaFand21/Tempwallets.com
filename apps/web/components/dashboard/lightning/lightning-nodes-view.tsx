@@ -287,8 +287,8 @@ function LightningBalancesCard({
           <div className="flex items-start gap-1.5 px-3 pt-1">
             <Info className="h-3 w-3 text-gray-300 mt-0.5 shrink-0" />
             <p className="text-[9px] text-gray-400 leading-tight">
-              To move unified balance to wallet: use the Move Balance tab
-              in Custody to close your channel, then Withdraw.
+              Flow: Deposit → funds locked in channel. Close channel → funds return to custody.
+              Withdraw → funds sent to your wallet.
             </p>
           </div>
         </div>
@@ -309,9 +309,11 @@ function CustodyActionsCard({
   channels,
   channelsLoading,
   closingChannelId,
+  storedChannelId,
   onDeposit,
   onWithdraw,
   onCloseChannel,
+  onDismissStoredChannel,
   onFetchChannels,
 }: {
   depositing: boolean;
@@ -321,9 +323,11 @@ function CustodyActionsCard({
   channels: { channelId: string; status: string; asset?: string; balance?: string; amount?: string }[];
   channelsLoading: boolean;
   closingChannelId: string | null;
+  storedChannelId: string | null;
   onDeposit: (chain: string, asset: string, amount: string) => Promise<boolean>;
   onWithdraw: (chain: string, asset: string, amount: string) => Promise<boolean>;
   onCloseChannel: (channelId: string) => Promise<boolean>;
+  onDismissStoredChannel: () => void;
   onFetchChannels: () => void;
 }) {
   const [tab, setTab] = useState<CustodyTab>('deposit');
@@ -464,7 +468,7 @@ function CustodyActionsCard({
 
           {custodyAvailable != null && parseFloat(custodyAvailable) <= 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 text-[10px] text-amber-800">
-              No funds in custody. Use the Move Balance tab to transfer unified balance to custody first.
+              No funds available in custody. Deposit USDC first, or check your on-chain balance.
             </div>
           )}
 
@@ -527,64 +531,114 @@ function CustodyActionsCard({
 
         <TabsContent value="move" className="space-y-2 mt-0">
           <p className="text-[10px] text-gray-500">
-            Move unified balance to custody by closing your payment channel.
-            Funds in the channel are settled back to custody available.
+            Close your payment channel to release locked funds back to custody.
+            Then use the <strong>Withdraw</strong> tab to send funds to your wallet.
           </p>
 
-          <div className="bg-gray-50 rounded-lg px-3 py-1.5 flex justify-between text-xs">
-            <span className="text-gray-500">Unified available</span>
-            <span className="font-medium text-gray-900">
-              {unifiedAvail.toFixed(4)} USDC
-            </span>
+          {/* Balances summary */}
+          <div className="grid grid-cols-2 gap-1.5">
+            <div className="bg-gray-50 rounded-lg px-2.5 py-1.5">
+              <p className="text-[10px] text-gray-400">Unified</p>
+              <p className="text-xs font-medium text-gray-900">{unifiedAvail.toFixed(4)} USDC</p>
+            </div>
+            <div className="bg-gray-50 rounded-lg px-2.5 py-1.5">
+              <p className="text-[10px] text-gray-400">Custody available</p>
+              <p className="text-xs font-medium text-gray-900">
+                {custodyAvailable != null ? `${parseFloat(custodyAvailable).toFixed(4)} USDC` : '—'}
+              </p>
+            </div>
           </div>
 
+          {/* Active Channel from localStorage (always shown if present) */}
+          {storedChannelId && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg px-2.5 py-2">
+              <div className="flex items-center justify-between mb-1">
+                <p className="text-[10px] text-blue-600 font-medium">Active Channel</p>
+                <button
+                  onClick={onDismissStoredChannel}
+                  className="text-blue-300 hover:text-blue-600"
+                  title="Dismiss"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-mono text-xs text-blue-900">{truncate(storedChannelId, 8)}</p>
+                  <button
+                    onClick={() => copyToClipboard(storedChannelId, 'Channel ID copied!')}
+                    className="flex items-center gap-1 text-[10px] text-blue-400 hover:text-blue-700 mt-0.5"
+                  >
+                    <Copy className="h-2.5 w-2.5" />
+                    Copy full ID
+                  </button>
+                </div>
+                <Button
+                  onClick={() => onCloseChannel(storedChannelId)}
+                  disabled={closingChannelId === storedChannelId}
+                  variant="outline"
+                  className="h-7 text-[10px] px-2.5 border-blue-300 text-blue-700 hover:bg-blue-100 bg-white"
+                >
+                  {closingChannelId === storedChannelId ? (
+                    <><Loader2 className="h-3 w-3 animate-spin mr-1" />Closing…</>
+                  ) : (
+                    'Close Channel'
+                  )}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Channel list from API */}
           {channelsLoading ? (
             <div className="flex items-center gap-1.5 text-xs text-gray-500 py-2 justify-center">
               <Loader2 className="h-3 w-3 animate-spin" />
-              Loading channels...
+              Loading channels…
             </div>
-          ) : channels.length === 0 ? (
+          ) : channels.length === 0 && !storedChannelId ? (
             <div className="bg-gray-50 rounded-lg p-2 text-[10px] text-gray-500 text-center">
-              No open payment channels. Deposit to custody and the channel will be
-              created automatically.
+              No open payment channels. Deposit to custody to get started.
             </div>
-          ) : (
+          ) : channels.length > 0 ? (
             <div className="space-y-1.5">
-              <p className="text-[10px] text-gray-500">
-                Close channel to move funds to custody available:
-              </p>
-              {channels.map((ch) => (
-                <div
-                  key={ch.channelId}
-                  className="flex items-center justify-between bg-gray-50 rounded-lg px-2.5 py-1.5 text-xs"
-                >
-                  <div>
-                    <p className="font-mono text-gray-700">{truncate(ch.channelId, 5)}</p>
-                    <p className="text-[10px] text-gray-400">{ch.status}</p>
-                  </div>
-                  <Button
-                    onClick={() => onCloseChannel(ch.channelId)}
-                    disabled={closingChannelId === ch.channelId}
-                    variant="outline"
-                    className="h-6 text-[10px] px-2 border-gray-300 text-gray-700"
+              <p className="text-[10px] text-gray-500 font-medium">Open channels:</p>
+              {channels.map((ch) => {
+                // Don't duplicate if already shown in the Active Channel badge
+                const isStored = ch.channelId === storedChannelId;
+                return (
+                  <div
+                    key={ch.channelId}
+                    className={`flex items-center justify-between rounded-lg px-2.5 py-1.5 text-xs ${
+                      isStored ? 'bg-blue-50' : 'bg-gray-50'
+                    }`}
                   >
-                    {closingChannelId === ch.channelId ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                    ) : (
-                      'Close Channel'
-                    )}
-                  </Button>
-                </div>
-              ))}
+                    <div>
+                      <p className="font-mono text-gray-700">{truncate(ch.channelId, 5)}</p>
+                      <p className="text-[10px] text-gray-400">{ch.status}</p>
+                    </div>
+                    <Button
+                      onClick={() => onCloseChannel(ch.channelId)}
+                      disabled={closingChannelId === ch.channelId}
+                      variant="outline"
+                      className="h-6 text-[10px] px-2 border-gray-300 text-gray-700"
+                    >
+                      {closingChannelId === ch.channelId ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        'Close'
+                      )}
+                    </Button>
+                  </div>
+                );
+              })}
             </div>
-          )}
+          ) : null}
 
           <div className="flex items-start gap-1.5 pt-1">
             <Info className="h-3 w-3 text-gray-300 mt-0.5 shrink-0" />
             <p className="text-[9px] text-gray-400 leading-tight">
-              Closing a channel settles its balance on-chain, moving funds from
-              unified balance back to custody available. Then use the Withdraw
-              tab to send to your wallet.
+              Closing the channel releases locked funds to your custody balance.
+              Then use the <strong>Withdraw</strong> tab to move funds to your wallet.
             </p>
           </div>
         </TabsContent>
@@ -1542,11 +1596,15 @@ export function LightningNodesView() {
   const { userId } = useAuth();
   const [chain, setChain] = useState(DEFAULT_CHAIN);
 
-  // All hooks
+  // All hooks — channels before custody so saveChannelId callback is available
   const auth = useYellowAuth(userId, chain);
   const balances = useYellowBalances(userId, chain, DEFAULT_ASSET, auth.authenticated);
-  const custody = useCustodyActions(userId, balances.refreshBalances);
   const channels = useChannelActions(userId, chain, balances.refreshBalances);
+  const custody = useCustodyActions(
+    userId,
+    () => { balances.refreshBalances(); channels.fetchChannels(); },
+    channels.saveChannelId,
+  );
   const sessions = useAppSessions(userId, chain, auth.authenticated, auth.walletAddress, balances.refreshBalances);
 
   // Dialog state
@@ -1652,9 +1710,11 @@ export function LightningNodesView() {
             channels={channels.channels}
             channelsLoading={channels.channelsLoading}
             closingChannelId={channels.closingChannelId}
+            storedChannelId={channels.storedChannelId}
             onDeposit={custody.depositToCustody}
             onWithdraw={custody.withdrawFromCustody}
             onCloseChannel={channels.closeChannel}
+            onDismissStoredChannel={channels.dismissStoredChannel}
             onFetchChannels={channels.fetchChannels}
           />
 
@@ -1714,7 +1774,9 @@ export function LightningNodesView() {
               </div>
             )}
 
-            {sessions.sessions.map((s) => (
+            {sessions.sessions
+              .filter((s) => (s.status || '').toLowerCase() !== 'closed')
+              .map((s) => (
               <SessionCard
                 key={s.appSessionId}
                 session={s}

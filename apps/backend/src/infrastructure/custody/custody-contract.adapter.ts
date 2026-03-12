@@ -487,9 +487,10 @@ export class CustodyContractAdapter implements ICustodyContractPort {
       }
     }
 
-    // IMPORTANT: This should NOT touch the wallet. resizeChannel is an off-chain
-    // operation that moves funds from custody -> unified ledger, assuming funds
-    // are already deposited into the custody contract.
+    // Send resize_channel RPC to ClearNode so it credits the unified balance.
+    // SDKChannelService.resizeChannel() now skips the on-chain custody.resize()
+    // transaction when ClearNode returns zero allocations (handshake mode),
+    // preventing the custody fund consumption bug.
     await this.channelManager.resizeChannel({
       channelId,
       chainId,

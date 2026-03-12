@@ -196,6 +196,7 @@ export interface CustodyActionsState {
 export function useCustodyActions(
   userId: string | null,
   onSuccess?: () => void,
+  onChannelId?: (channelId: string, chain: string) => void,
 ): CustodyActionsState {
   const [depositing, setDepositing] = useState(false);
   const [withdrawing, setWithdrawing] = useState(false);
@@ -207,7 +208,12 @@ export function useCustodyActions(
       try {
         const res = await yellowApi.depositToCustody({ userId, chain, asset, amount });
         if (res.ok) {
-          toast.success('Custody deposit submitted. Takes 60–90s to index.');
+          // Persist channelId returned by the deposit (backend uses channel internally)
+          const channelId = res.data?.channelId;
+          if (channelId) {
+            onChannelId?.(channelId, chain);
+          }
+          toast.success('Deposit complete. Custody and unified balances updated.');
           onSuccess?.();
           return true;
         }
@@ -220,7 +226,7 @@ export function useCustodyActions(
         setDepositing(false);
       }
     },
-    [userId, onSuccess],
+    [userId, onSuccess, onChannelId],
   );
 
   const withdrawFromCustody = useCallback(
@@ -256,9 +262,14 @@ export interface ChannelActionsState {
   channelsLoading: boolean;
   funding: boolean;
   closingChannelId: string | null;
+  storedChannelId: string | null;
   fetchChannels: () => Promise<void>;
   fundChannel: (asset: string, amount: string) => Promise<boolean>;
   closeChannel: (channelId: string) => Promise<boolean>;
+  /** Persist a channelId to localStorage and update state (called after deposit) */
+  saveChannelId: (channelId: string, chain: string) => void;
+  /** Remove stored channel from localStorage without calling the API */
+  dismissStoredChannel: () => void;
 }
 
 export function useChannelActions(
@@ -270,6 +281,17 @@ export function useChannelActions(
   const [channelsLoading, setChannelsLoading] = useState(false);
   const [funding, setFunding] = useState(false);
   const [closingChannelId, setClosingChannelId] = useState<string | null>(null);
+  const [storedChannelId, setStoredChannelId] = useState<string | null>(null);
+
+  // Load stored channelId from localStorage whenever userId/chain changes
+  useEffect(() => {
+    if (!userId || typeof window === 'undefined') {
+      setStoredChannelId(null);
+      return;
+    }
+    const key = `yellow_channel_id_${userId}_${chain}`;
+    setStoredChannelId(localStorage.getItem(key));
+  }, [userId, chain]);
 
   const fetchChannels = useCallback(async () => {
     if (!userId) return;
@@ -291,6 +313,12 @@ export function useChannelActions(
       try {
         const res = await yellowApi.fundChannel({ userId, chain, asset, amount });
         if (res.ok) {
+          // Persist channelId to localStorage for use in close operations
+          if (res.channelId && typeof window !== 'undefined') {
+            const key = `yellow_channel_id_${userId}_${chain}`;
+            localStorage.setItem(key, res.channelId);
+            setStoredChannelId(res.channelId);
+          }
           toast.success('Payment channel funded. Unified balance updated.');
           onSuccess?.();
           await fetchChannels();
@@ -315,6 +343,14 @@ export function useChannelActions(
       try {
         const res = await yellowApi.closeChannel({ userId, chain, channelId });
         if (res.ok) {
+          // Clear stored channelId if this was the active channel
+          if (typeof window !== 'undefined') {
+            const key = `yellow_channel_id_${userId}_${chain}`;
+            if (localStorage.getItem(key) === channelId) {
+              localStorage.removeItem(key);
+              setStoredChannelId(null);
+            }
+          }
           toast.success('Channel closed. Funds returned to custody available balance.');
           onSuccess?.();
           setChannels((prev) => prev.filter((c) => c.channelId !== channelId));
@@ -332,14 +368,37 @@ export function useChannelActions(
     [userId, chain, onSuccess],
   );
 
+  const saveChannelId = useCallback(
+    (channelId: string, chainParam: string) => {
+      if (!userId || typeof window === 'undefined') return;
+      const key = `yellow_channel_id_${userId}_${chainParam}`;
+      localStorage.setItem(key, channelId);
+      // Update state only if this is the currently active chain
+      if (chainParam === chain) {
+        setStoredChannelId(channelId);
+      }
+    },
+    [userId, chain],
+  );
+
+  const dismissStoredChannel = useCallback(() => {
+    if (!userId || typeof window === 'undefined') return;
+    const key = `yellow_channel_id_${userId}_${chain}`;
+    localStorage.removeItem(key);
+    setStoredChannelId(null);
+  }, [userId, chain]);
+
   return {
     channels,
     channelsLoading,
     funding,
     closingChannelId,
+    storedChannelId,
     fetchChannels,
     fundChannel,
     closeChannel,
+    saveChannelId,
+    dismissStoredChannel,
   };
 }
 
