@@ -125,7 +125,7 @@ export class CustodyContractAdapter implements ICustodyContractPort {
       nonce,
     });
 
-    console.log(`✅ Approval transaction: ${hash}`);
+    console.log(`✅ Approval tx=${hash}`);
 
     await publicClient.waitForTransactionReceipt({ hash });
     console.log(`✅ Approval confirmed`);
@@ -177,20 +177,17 @@ export class CustodyContractAdapter implements ICustodyContractPort {
       abi: CUSTODY_ABI,
       functionName: 'deposit',
       args: [
-        userAddress as Address, // account (recipient of the custody credit)
-        tokenAddress as Address, // token (ERC20 to deposit)
-        amount, // amount in token's smallest units
+        userAddress as Address,
+        tokenAddress as Address,
+        amount,
       ],
       nonce,
     });
 
-    console.log(`✅ Deposit transaction: ${hash}`);
+    console.log(`✅ Deposit tx=${hash}`);
 
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
-    console.log(`✅ Deposit confirmed in block ${receipt.blockNumber}`);
-    console.log(
-      `Yellow Network will now index this deposit and credit unified balance`,
-    );
+    console.log(`✅ Deposit confirmed block=${receipt.blockNumber}`);
 
     return hash;
   }
@@ -225,10 +222,7 @@ export class CustodyContractAdapter implements ICustodyContractPort {
       blockTag: 'pending',
     });
 
-    console.log(`[approveAndDeposit] Base nonce: ${baseNonce}`);
-
     // --- approve (nonce N) ---
-    console.log(`Approving ${amount} tokens for custody contract (nonce: ${baseNonce})...`);
     const approveHash = await walletClient.writeContract({
       address: tokenAddress as Address,
       abi: ERC20_ABI,
@@ -236,11 +230,10 @@ export class CustodyContractAdapter implements ICustodyContractPort {
       args: [custodyAddress, amount],
       nonce: baseNonce,
     });
-    console.log(`✅ Approval submitted: ${approveHash}`);
+    console.log(`✅ Approval submitted: approve tx=${approveHash}`);
 
     // --- deposit (nonce N+1, broadcast immediately — no need to wait for approve) ---
     const depositNonce = baseNonce + 1;
-    console.log(`Depositing ${amount} tokens to custody contract (nonce: ${depositNonce})...`);
     const depositHash = await walletClient.writeContract({
       address: custodyAddress,
       abi: CUSTODY_ABI,
@@ -252,16 +245,13 @@ export class CustodyContractAdapter implements ICustodyContractPort {
       ],
       nonce: depositNonce,
     });
-    console.log(`✅ Deposit submitted: ${depositHash}`);
+    console.log(`✅ Deposit submitted: deposit tx=${depositHash}`);
 
     // Wait for both transactions to be confirmed (in order)
-    console.log(`Waiting for approval confirmation...`);
     await publicClient.waitForTransactionReceipt({ hash: approveHash });
-    console.log(`✅ Approval confirmed`);
 
-    console.log(`Waiting for deposit confirmation...`);
     const depositReceipt = await publicClient.waitForTransactionReceipt({ hash: depositHash });
-    console.log(`✅ Deposit confirmed in block ${depositReceipt.blockNumber}`);
+    console.log(`✅ Deposit confirmed block=${depositReceipt.blockNumber}`);
 
     return { approveTxHash: approveHash, depositTxHash: depositHash };
   }
@@ -396,8 +386,6 @@ export class CustodyContractAdapter implements ICustodyContractPort {
     const rawBalance: bigint = (result as bigint[][])[0]?.[0] ?? BigInt(0);
     const decimals = 6;
     const humanBalance = (Number(rawBalance) / Math.pow(10, decimals)).toFixed(decimals);
-
-    console.log(`[CustodyContractAdapter] Available balance for ${userAddress}: ${rawBalance} raw → ${humanBalance}`);
 
     return humanBalance;
   }

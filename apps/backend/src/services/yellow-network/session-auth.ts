@@ -94,16 +94,6 @@ export class SessionKeyAuth {
     // OPTIMIZATION: Skip re-authentication if session is still valid
     // Check if we have an existing session that hasn't expired
     if (this.sessionKey && this.isAuthenticated()) {
-      const remainingTime = this.sessionKey.expiresAt - Date.now();
-      const remainingHours = Math.floor(remainingTime / (60 * 60 * 1000));
-      const remainingMinutes = Math.floor(
-        (remainingTime % (60 * 60 * 1000)) / (60 * 1000),
-      );
-
-      console.log(
-        `[SessionKeyAuth] ✅ Session already valid (expires in ${remainingHours}h ${remainingMinutes}m). Skipping re-authentication.`,
-      );
-
       // Return cached authentication result
       return {
         success: true,
@@ -113,46 +103,16 @@ export class SessionKeyAuth {
       };
     }
 
-    console.log('[SessionKeyAuth] Starting authentication flow...');
-
     // Step 1: Generate session key
     const { account: sessionKeyAccount, privateKey: sessionKeyPrivateKey } =
       this.generateSessionKey();
-    // Yellow docs are inconsistent on expires_at units (seconds vs ms). The clearnode JWT exp
-    // expects seconds, so keep ms locally for expiry checks but send seconds to the server.
     const expiresAtMs = Date.now() + expiryHours * 60 * 60 * 1000;
     const expiresAtSeconds = Math.floor(expiresAtMs / 1000);
-
-    console.log(
-      '[SessionKeyAuth] Generated session key:',
-      sessionKeyAccount.address,
-    );
 
     // Step 2: auth_request - Register session key
     // Ensure addresses are properly checksummed
     const mainWalletAddress = getAddress(this.mainWallet.address);
     const sessionKeyAddress = getAddress(sessionKeyAccount.address);
-
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/005b81a7-88d6-4d11-8cdb-3c666a545d81', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        location: 'session-auth.ts:99',
-        message: 'Address checksumming - before/after',
-        data: {
-          originalMainWallet: this.mainWallet.address,
-          checksummedMainWallet: mainWalletAddress,
-          originalSessionKey: sessionKeyAccount.address,
-          checksummedSessionKey: sessionKeyAddress,
-        },
-        timestamp: Date.now(),
-        sessionId: 'debug-session',
-        runId: 'run1',
-        hypothesisId: 'C',
-      }),
-    }).catch(() => {});
-    // #endregion
 
     const authParams: AuthRequestParams = {
       address: mainWalletAddress,
@@ -169,15 +129,9 @@ export class SessionKeyAuth {
       sig: [] as string[], // Public method - no signature
     };
 
-    console.log('[SessionKeyAuth] Step 1/3: Sending auth_request...');
     const challengeResponse = await this.ws.send(authRequest);
     const challengeData = challengeResponse.res[2] as AuthChallengeResponse;
     const challengeMessage = challengeData.challenge_message;
-
-    console.log(
-      '[SessionKeyAuth] Step 2/3: Received challenge:',
-      challengeMessage,
-    );
 
     // Step 3a: Sign challenge with session key
     const sessionKeySig = await this.signWithSessionKey(
@@ -188,78 +142,8 @@ export class SessionKeyAuth {
     // Step 3b: Build EIP-712 typed data for main wallet signature
     const typedData = this.buildAuthTypedData(authParams, challengeMessage);
 
-    console.log(
-      '[SessionKeyAuth] Step 3/3: Requesting main wallet signature...',
-    );
-    console.log(
-      '[SessionKeyAuth] Typed data message:',
-      JSON.stringify(typedData.message, null, 2),
-    );
-    console.log(
-      '[SessionKeyAuth] Main wallet address:',
-      this.mainWallet.address,
-    );
-    console.log(
-      '[SessionKeyAuth] Typed data wallet field:',
-      typedData.message.wallet,
-    );
-
-    // Verify addresses match exactly
-    const walletInMessage = typedData.message.wallet.toLowerCase();
-    const mainWalletLower = this.mainWallet.address.toLowerCase();
-    const addressesMatch = walletInMessage === mainWalletLower;
-    console.log(
-      `[SessionKeyAuth] Address match check: ${addressesMatch ? '✅' : '❌'} (message: ${walletInMessage}, main: ${mainWalletLower})`,
-    );
-
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/005b81a7-88d6-4d11-8cdb-3c666a545d81', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        location: 'session-auth.ts:141',
-        message: 'Before signing - typed data structure and address match',
-        data: {
-          typedData: typedData,
-          mainWalletAddress: this.mainWallet.address,
-          walletInMessage: typedData.message.wallet,
-          addressesMatch: addressesMatch,
-        },
-        timestamp: Date.now(),
-        sessionId: 'debug-session',
-        runId: 'run2',
-        hypothesisId: 'B',
-      }),
-    }).catch(() => {});
-    // #endregion
-
     // Sign with main wallet
     const mainWalletSig = await this.mainWallet.signTypedData(typedData);
-    console.log(
-      '[SessionKeyAuth] Signature generated:',
-      mainWalletSig.substring(0, 20) + '...',
-    );
-
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/005b81a7-88d6-4d11-8cdb-3c666a545d81', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        location: 'session-auth.ts:142',
-        message: 'After signing - signature details',
-        data: {
-          signature: mainWalletSig,
-          signatureLength: mainWalletSig.length,
-          has0xPrefix: mainWalletSig.startsWith('0x'),
-          signatureFirst20: mainWalletSig.substring(0, 20),
-        },
-        timestamp: Date.now(),
-        sessionId: 'debug-session',
-        runId: 'run1',
-        hypothesisId: 'A',
-      }),
-    }).catch(() => {});
-    // #endregion
 
     // Step 4: auth_verify - Submit signatures
     const verifyParams: AuthVerifyParams = {
@@ -273,74 +157,16 @@ export class SessionKeyAuth {
       sig: [mainWalletSig] as string[], // Main wallet signature
     };
 
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/005b81a7-88d6-4d11-8cdb-3c666a545d81', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        location: 'session-auth.ts:152',
-        message: 'Before sending auth_verify - full request',
-        data: {
-          verifyRequest: verifyRequest,
-          requestId: requestId2,
-          verifyParams: verifyParams,
-          signatureInRequest: verifyRequest.sig[0],
-          signatureLength: verifyRequest.sig[0]?.length,
-        },
-        timestamp: Date.now(),
-        sessionId: 'debug-session',
-        runId: 'run1',
-        hypothesisId: 'F',
-      }),
-    }).catch(() => {});
-    // #endregion
-
-    console.log('[SessionKeyAuth] Sending auth_verify...');
     try {
       const verifyResponse = await this.ws.send(verifyRequest);
       const responseData = verifyResponse.res[2];
       const isErrorResponse = verifyResponse.res[1] === 'error';
-
-      // #region agent log
-      const errorMessage = isErrorResponse
-        ? (responseData as { error: string }).error
-        : undefined;
       const hasSuccess =
         !isErrorResponse &&
         (responseData as AuthVerifyResponse).success === true;
-      fetch(
-        'http://127.0.0.1:7242/ingest/005b81a7-88d6-4d11-8cdb-3c666a545d81',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            location: 'session-auth.ts:177',
-            message:
-              'After receiving response - full response with error details',
-            data: {
-              verifyResponse: verifyResponse,
-              responseData: responseData,
-              responseMethod: verifyResponse.res[1],
-              isErrorResponse: isErrorResponse,
-              errorMessage: errorMessage,
-              hasSuccess: hasSuccess,
-              fullResponseString: JSON.stringify(verifyResponse),
-              requestId: verifyRequest.req[0],
-              challengeUsed: verifyParams.challenge,
-            },
-            timestamp: Date.now(),
-            sessionId: 'debug-session',
-            runId: 'run2',
-            hypothesisId: 'E',
-          }),
-        },
-      ).catch(() => {});
-      // #endregion
 
       if (isErrorResponse || !hasSuccess) {
         console.error('[SessionKeyAuth] Authentication failed:', responseData);
-        console.error('[SessionKeyAuth] Auth params:', authParams);
-        console.error('[SessionKeyAuth] Challenge:', challengeMessage);
         throw new Error(
           `Authentication failed: ${JSON.stringify(responseData)}`,
         );
@@ -359,25 +185,13 @@ export class SessionKeyAuth {
         authSignature: mainWalletSig,
       };
 
-      console.log('[SessionKeyAuth] ✅ Authentication successful');
       console.log(
-        `  - Session expires at: ${new Date(expiresAtMs).toISOString()}`,
-      );
-      console.log(
-        `  - Allowances: ${allowances.length > 0 ? JSON.stringify(allowances) : 'unrestricted'}`,
+        `[SessionKeyAuth] ✅ Authentication successful, expires=${new Date(expiresAtMs).toISOString()}`,
       );
 
       return authResult;
     } catch (error) {
       console.error('[SessionKeyAuth] Authentication error:', error);
-      console.error(
-        '[SessionKeyAuth] Main wallet address:',
-        this.mainWallet.address,
-      );
-      console.error(
-        '[SessionKeyAuth] Session key address:',
-        sessionKeyAccount.address,
-      );
       throw error;
     }
   }

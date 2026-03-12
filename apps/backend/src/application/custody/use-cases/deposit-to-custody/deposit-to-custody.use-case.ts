@@ -171,26 +171,35 @@ export class DepositToCustodyUseCase {
         const a = (b.asset || '').toLowerCase();
         return a === targetSymbol || a === targetToken;
       });
-      if (entry) {
+      // ClearNode sends two bu notifications during a deposit+resize flow:
+      // 1. After custody.create() — reports 0 (channel just opened, nothing locked yet)
+      // 2. After custody.resize() is indexed (~7s later) — reports the actual balance
+      // If the first bu shows 0, treat it as "not yet ready" and fall through to the
+      // get_ledger_balances query, which will correctly show the post-resize balance.
+      if (entry && parseFloat(entry.amount) > 0) {
         unifiedBalance = entry.amount;
         console.log(
           `[DepositToCustodyUseCase] bu notification received — unified balance: ${unifiedBalance}`,
         );
       } else {
-        // `bu` arrived but didn't include our asset — fall through to query
-        throw new Error('asset not in bu payload');
+        throw new Error(entry ? 'bu showed 0 (channel-create event, not resize)' : 'asset not in bu payload');
       }
     } catch (err: any) {
+      // bu was either 0 (channel-create event fired before resize indexed) or timed out.
+      // Wait 8s for the resize to be indexed by ClearNode, then do a single direct query.
+      // This matches the observed ~7s delay between resize TX confirm and the real bu.
       console.warn(
-        `[DepositToCustodyUseCase] bu notification not usable (${err?.message}); falling back to get_ledger_balances`,
+        `[DepositToCustodyUseCase] bu not usable (${err?.message}); waiting 8s for resize indexing then querying`,
       );
       try {
+        await new Promise((r) => setTimeout(r, 8_000));
         const balances = await this.yellowNetwork.getUnifiedBalance(userAddress);
         const entry = balances.find((b) => {
           const a = (b.asset || '').toLowerCase();
           return a === targetSymbol || a === targetToken;
         });
         unifiedBalance = entry?.amount ?? '0';
+        console.log(`[DepositToCustodyUseCase] Post-resize balance query: unified=${unifiedBalance}`);
       } catch (queryErr: any) {
         console.warn(`[DepositToCustodyUseCase] Fallback balance query failed: ${queryErr?.message}`);
       }

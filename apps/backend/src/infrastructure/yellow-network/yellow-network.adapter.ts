@@ -255,11 +255,7 @@ export class YellowNetworkAdapter
     );
 
     console.log(
-      `[YellowNetworkAdapter] Current session version before ${params.intent}: ${currentSession.version}`,
-    );
-    console.log(
-      `[YellowNetworkAdapter] Current session allocations:`,
-      JSON.stringify(currentSession.allocations),
+      `[YellowNetworkAdapter] updateSession intent=${params.intent} session=${params.sessionId}`,
     );
 
     // Validate allocations
@@ -320,14 +316,6 @@ export class YellowNetworkAdapter
       }
     }
 
-    console.log(
-      `[YellowNetworkAdapter] Submitting ${params.intent} with version ${currentSession.version + 1}`,
-    );
-    console.log(
-      `[YellowNetworkAdapter] Complete allocations (all participants):`,
-      JSON.stringify(completeAllocations),
-    );
-
     // Submit the allocations as FINAL state — this is what Yellow protocol expects.
     // IMPORTANT: Normalize asset names to lowercase — Yellow Network uses lowercase
     // asset identifiers (e.g. "usdc"), but API callers may send "USDC".
@@ -342,25 +330,12 @@ export class YellowNetworkAdapter
       })),
     );
 
-    console.log(
-      `[YellowNetworkAdapter] Submit result:`,
-      JSON.stringify(result),
-    );
-
     // Update the allocation cache with the complete allocations we just sent
     this.allocationCache.set(params.sessionId, completeAllocations);
 
     // Refresh session to get updated state
     const updated = await this.currentClient.getLightningNode(
       params.sessionId as `0x${string}`,
-    );
-
-    console.log(
-      `[YellowNetworkAdapter] Updated session version after ${params.intent}: ${updated.version}`,
-    );
-    console.log(
-      `[YellowNetworkAdapter] Updated session allocations:`,
-      JSON.stringify(updated.allocations),
     );
 
     return updated as YellowSessionData;
@@ -390,13 +365,7 @@ export class YellowNetworkAdapter
     const cached = this.allocationCache.get(sessionId);
     const allocationsToSend = cached || finalAllocations;
 
-    console.log(
-      `[YellowNetworkAdapter] Closing session ${sessionId}`,
-    );
-    console.log(
-      `[YellowNetworkAdapter] Close allocations (${cached ? 'from cache' : 'from query'}):`,
-      JSON.stringify(allocationsToSend),
-    );
+    console.log(`[YellowNetworkAdapter] Closing session=${sessionId}`);
 
     await this.currentClient.closeLightningNode(
       sessionId as `0x${string}`,
@@ -532,9 +501,6 @@ export class YellowNetworkAdapter
       ];
     } else {
       // Let the channel service resolve participants from channel data
-      console.log(
-        `[YellowNetworkAdapter] Participants not provided, will resolve from channel data`,
-      );
       participantsTuple = undefined;
     }
 
@@ -585,8 +551,8 @@ export class YellowNetworkAdapter
 
     console.log(
       `[YellowNetworkAdapter] Found ${channels?.length || 0} total channels, ` +
-        `${userChannels.length} belong to user ${userAddress}, ` +
-        `${activeChannels.length} are active`,
+        `${userChannels.length} belong to user, ` +
+        `${activeChannels.length} active`,
     );
 
     return activeChannels.map((ch: any) => ({
