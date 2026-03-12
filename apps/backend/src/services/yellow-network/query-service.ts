@@ -44,8 +44,6 @@ export class QueryService {
    * @returns Array of balance entries per asset
    */
   async getLedgerBalances(accountId?: string): Promise<LedgerBalance[]> {
-    console.log('[QueryService] Fetching ledger balances...');
-
     const requestId = this.ws.getNextRequestId();
     let request: RPCRequest = {
       req: [
@@ -82,8 +80,11 @@ export class QueryService {
       available: b.available ?? b.amount,
     }));
 
+    const summary = balances
+      .map((b) => `${b.asset.toUpperCase()}=${b.amount}`)
+      .join(', ');
     console.log(
-      `[QueryService] Found ${balances.length} assets in unified balance`,
+      `[QueryService] Unified balance: ${summary || 'empty'}`,
     );
 
     return balances;
@@ -100,15 +101,12 @@ export class QueryService {
     status?: 'open' | 'closed',
     participant?: string,
   ): Promise<AppSession[]> {
-    console.log('[QueryService] Fetching app sessions...');
-
     // Build filter parameters
 
     const params: Record<string, unknown> = {};
     if (status) (params as { status?: string }).status = status;
     if (participant) {
       (params as { participant?: string }).participant = participant;
-      console.log(`[QueryService] Filtering by participant: ${participant}`);
     }
 
     const requestId = this.ws.getNextRequestId();
@@ -170,8 +168,6 @@ export class QueryService {
    * @returns Array of payment channels
    */
   async getChannels(): Promise<ChannelWithState[]> {
-    console.log('[QueryService] Fetching payment channels...');
-
     const requestId = this.ws.getNextRequestId();
     let request: RPCRequest = {
       req: [requestId, 'get_channels', {}, Date.now()],
@@ -180,12 +176,6 @@ export class QueryService {
 
     request = await this.auth.signRequest(request);
     const response = await this.ws.send(request);
-
-    // Log full response for debugging
-    console.log(
-      '[QueryService] Full get_channels response:',
-      JSON.stringify(response, null, 2),
-    );
 
     // Check for errors in response
     if (response.error) {
@@ -242,11 +232,6 @@ export class QueryService {
           ) {
             const userAddress = (c as { participant: Address }).participant;
             participants = [userAddress, userAddress];
-            const channelId = (c as { channel_id?: string }).channel_id;
-            console.warn(
-              `[QueryService] get_channels returned simplified structure for channel ${channelId}. ` +
-                `Using placeholder for clearnode address. Full participants array requires create_channel response.`,
-            );
           } else {
             throw new Error(
               `Invalid channel structure: missing participants or participant field. Channel: ${JSON.stringify(c)}`,
@@ -414,8 +399,6 @@ export class QueryService {
     limit?: number;
     offset?: number;
   }): Promise<LedgerTransaction[]> {
-    console.log('[QueryService] Fetching ledger transactions...');
-
     const requestId = this.ws.getNextRequestId();
     let request: RPCRequest = {
       req: [requestId, 'get_ledger_transactions', filters || {}, Date.now()],
@@ -466,10 +449,6 @@ export class QueryService {
    * @returns App definition with participants, weights, quorum, etc.
    */
   async getAppDefinition(appSessionId: Hash): Promise<any> {
-    console.log(
-      `[QueryService] Fetching app definition for ${appSessionId}...`,
-    );
-
     const requestId = this.ws.getNextRequestId();
     const request: RPCRequest = {
       req: [
@@ -495,10 +474,6 @@ export class QueryService {
     const challenge = typeof def.challenge === 'number' ? def.challenge : 0;
     const nonce = typeof def.nonce === 'number' ? def.nonce : 0;
 
-    console.log(
-      `[QueryService] ✅ Got app definition with ${participants.length} participants`,
-    );
-
     return {
       protocol,
       participants,
@@ -520,8 +495,6 @@ export class QueryService {
    * @returns App session details with full definition
    */
   async getAppSession(appSessionId: Hash): Promise<AppSession> {
-    console.log(`[QueryService] Fetching app session ${appSessionId}...`);
-
     // Step 1: Get app definition directly by ID (public method, no pagination issues)
     // This is the reliable way to fetch a specific session's governance parameters.
     const definitionRaw = (await this.getAppDefinition(
@@ -564,6 +537,28 @@ export class QueryService {
     // Ledger balances are per-asset totals for the session, not per-participant.
     // We only trust allocations from session list responses.
     const allocations: import('./types.js').AppSessionAllocation[] = [];
+    try {
+      const sessionBalances = await this.getAppSessionBalances(appSessionId);
+      // Convert LedgerBalance[] to AppSessionAllocation[]
+      // Note: get_ledger_balances returns per-asset totals for the session,
+      // not per-participant. We distribute across participants based on
+      // what we know. For single-asset sessions, we can build from this.
+      if (sessionBalances.length > 0) {
+        // Build allocations from session balances
+        // Each balance entry represents an asset in the session
+        for (const balance of sessionBalances) {
+          if (parseFloat(balance.amount) > 0) {
+            allocations.push({
+              participant: participants[0] || ('0x' as `0x${string}`),
+              asset: balance.asset,
+              amount: balance.amount,
+            });
+          }
+        }
+      }
+    } catch (error) {
+      console.warn(`[QueryService] Failed to get session balances:`, error);
+    }
 
     // Step 3: Try to find session metadata from get_app_sessions with higher limit
     // The default limit is 10 which may miss newly created sessions.
@@ -585,9 +580,6 @@ export class QueryService {
         session.allocations && session.allocations.length > 0
           ? session.allocations
           : allocations;
-      console.log(
-        `[QueryService] ✅ Found session in list, merged with definition (${participants.length} participants, ${sessionAllocations.length} allocations)`,
-      );
       return {
         ...session,
         definition,
@@ -596,7 +588,7 @@ export class QueryService {
     }
 
     // Step 4: Session not in paginated list, but definition exists — build a minimal AppSession
-    console.log(
+    console.warn(
       `[QueryService] ⚠️ Session not in paginated list, building from definition (${participants.length} participants)`,
     );
     return {
@@ -686,10 +678,6 @@ export class QueryService {
    * @returns Array of balance entries (asset + amount) for the session
    */
   async getAppSessionBalances(appSessionId: Hash): Promise<LedgerBalance[]> {
-    console.log(
-      `[QueryService] Fetching balances for app session ${appSessionId}...`,
-    );
-
     const requestId = this.ws.getNextRequestId();
     let request: RPCRequest = {
       req: [
@@ -725,10 +713,6 @@ export class QueryService {
       locked: b.locked ?? '0',
       available: b.available ?? b.amount,
     }));
-
-    console.log(
-      `[QueryService] Found ${balances.length} assets in app session balance`,
-    );
 
     return balances;
   }

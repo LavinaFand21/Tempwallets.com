@@ -197,10 +197,6 @@ export class NitroliteClient {
 
     // Initialize Channel Service (SDK or Custom)
     if (this.useSDK) {
-      console.log(
-        '[NitroliteClient] Using Yellow Network SDK for channel operations',
-      );
-
       // For SDK, we need to pick a primary chain. We'll use the first one or Base (8453) if available.
       const baseNetwork = this.clearnodeConfig.networks.find(
         (n) => n.chain_id === 8453,
@@ -222,12 +218,9 @@ export class NitroliteClient {
       );
 
       console.log(
-        `[NitroliteClient] SDK initialized for chain ${primaryNetwork.chain_id}`,
+        `[NitroliteClient] SDK ready on chain ${primaryNetwork.chain_id}`,
       );
     } else {
-      console.log(
-        '[NitroliteClient] Using custom implementation for channel operations',
-      );
 
       this.channelService = new ChannelService(
         this.ws,

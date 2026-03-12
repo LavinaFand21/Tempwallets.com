@@ -69,14 +69,9 @@ export class ConfigLoader {
       this.config &&
       now - this.lastFetched < this.CACHE_TTL
     ) {
-      console.log('[ConfigLoader] Using cached config');
       return this.config;
     }
 
-    console.log('[ConfigLoader] Fetching fresh config from Clearnode...');
-
-    // Use the shared (already-open) connection when available so we never open
-    // a second parallel WebSocket to the same server.
     const ws = sharedWs ?? this.ws;
     const ownsConnection = !sharedWs;
 
@@ -109,12 +104,9 @@ export class ConfigLoader {
 
       this.lastFetched = now;
 
-      console.log('[ConfigLoader] Config loaded successfully:');
-      console.log(`  - Clearnode: ${this.config.broker_address}`);
-      console.log(`  - Networks: ${this.config.networks.length}`);
-      this.config.networks.forEach((network) => {
-        console.log(`    • ${network.name} (${network.chain_id})`);
-      });
+      console.log(
+        `[ConfigLoader] ClearNode connected, ${this.config.networks.length} chains supported`,
+      );
 
       // Only close the connection if we opened it ourselves
       if (ownsConnection) {

@@ -196,15 +196,8 @@ export class SDKChannelService {
       throw new Error(`Custody address not found for chain ${chainId}`);
     }
 
-    console.log('[SDKChannelService] Initializing Yellow Network SDK');
-    console.log(`[SDKChannelService] Chain ID: ${chainId}`);
-    console.log(`[SDKChannelService] Custody: ${custodyAddress}`);
-    console.log(`[SDKChannelService] Adjudicator: ${adjudicatorAddress}`);
     console.log(
-      `[SDKChannelService] RPC Timeout: ${this.rpcConfig.requestTimeoutMs}ms`,
-    );
-    console.log(
-      `[SDKChannelService] Max Retries: ${this.rpcConfig.maxRetries}`,
+      `[SDKChannelService] Initializing: chain=${chainId} custody=${custodyAddress}`,
     );
 
     this.sdkClient = new NitroliteClient({
@@ -218,8 +211,6 @@ export class SDKChannelService {
       chainId,
       challengeDuration: 3600n, // 1 hour challenge period
     });
-
-    console.log('[SDKChannelService] ✅ SDK initialized successfully');
   }
 
   /**
@@ -423,8 +414,6 @@ export class SDKChannelService {
     token: Address,
     initialDeposit?: bigint,
   ): Promise<ChannelWithState> {
-    console.log(`[SDKChannelService] Creating channel on chain ${chainId}...`);
-
     // Check authentication before proceeding
     if (!this.auth.isAuthenticated()) {
       throw new Error(
@@ -436,7 +425,6 @@ export class SDKChannelService {
     const response = await this.sendRPCWithTimeoutAndRetry(
       'create_channel',
       { chain_id: chainId, token },
-      // "not found" shouldn't happen during creation, but handle transient errors
       (err) => this.isDefaultRetryableError(err.message),
     );
 
@@ -444,14 +432,6 @@ export class SDKChannelService {
     if (!channelData) {
       throw new Error('No channel data in create_channel response');
     }
-
-    console.log(
-      '[SDKChannelService] Received channel data from Yellow Network',
-    );
-    console.log(
-      '[SDKChannelService] Channel ID (from Yellow):',
-      channelData.channel_id || channelData.channelId,
-    );
 
     // Step 2: Parse channel and state from response
     // Handle both camelCase and snake_case field names from Yellow Network
@@ -552,35 +532,43 @@ export class SDKChannelService {
       sigs: [userSignature as `0x${string}`, serverSignature as `0x${string}`],
     };
 
-    // Step 6: Submit to blockchain
+    // Step 6: Submit to blockchain.
+    // Fetch nonce explicitly with blockTag:'pending' before simulating.
+    // Without this, simulateContract auto-resolves the nonce via eth_getTransactionCount
+    // using the default blockTag ('latest'). Under load-balanced RPCs a node that
+    // hasn't yet synced the just-confirmed deposit TX returns a stale nonce count
+    // (e.g. 16) — identical to the nonce already used by custody.deposit() — causing
+    // a "nonce too low" revert on-chain. Pending includes all submitted (not yet mined)
+    // TXs, so it always returns the correct next nonce.
     const custodyAddress =
       this.custodyAddresses[chainId] ??
       '0x0000000000000000000000000000000000000000';
+    const createNonce = await this.publicClient.getTransactionCount({
+      address: walletAccount.address,
+      blockTag: 'pending',
+    });
     const { request: simRequest } = await this.publicClient.simulateContract({
       address: custodyAddress,
       abi: CustodyAbi,
       functionName: 'create',
       args: [channelForSDK as any, signedInitialState as any],
       account: walletAccount,
+      nonce: createNonce,
     });
 
     const txHash = await this.walletClient.writeContract(simRequest as any);
-    console.log('[SDKChannelService] Channel creation tx submitted:', txHash);
+    console.log(`[SDKChannelService] ✅ Channel create tx=${txHash}`);
 
     // Wait for confirmation
     const receipt = await this.publicClient.waitForTransactionReceipt({
       hash: txHash,
     });
     console.log(
-      `[SDKChannelService] ✅ Channel created in block ${receipt.blockNumber}`,
+      `[SDKChannelService] ✅ Channel created channel=${channelId} block=${receipt.blockNumber}`,
     );
 
     // Step 7: If initialDeposit provided, resize channel to add funds
     if (initialDeposit && initialDeposit > BigInt(0)) {
-      console.log(
-        `[SDKChannelService] Adding initial deposit ${initialDeposit} via resize...`,
-      );
-
       const userAddress = channel.participants[0] as Address;
       await this.resizeChannel(
         channelId,
@@ -654,10 +642,6 @@ export class SDKChannelService {
     participants?: [Address, Address],
     proofState?: any,
   ): Promise<ChannelState> {
-    console.log(
-      `[SDKChannelService] Resizing channel ${channelId} by ${amount.toString()}...`,
-    );
-
     const resizeAmount = amount;
     // allocate_amount = 0 is the documented convention for a plain custody deposit:
     //   resize_amount = +X  → lock X from custody free into channel adjudicator (on-chain)
@@ -687,7 +671,6 @@ export class SDKChannelService {
       throw new Error('Invalid resize response: missing state');
     }
 
-    console.log('[SDKChannelService] Received resize state from ClearNode');
     const {
       encodeAbiParameters,
       keccak256: keccak,
@@ -701,7 +684,6 @@ export class SDKChannelService {
     let proofForResize = proofState;
 
     if (!proofForResize) {
-      console.log('[SDKChannelService] Fetching proof state from contract...');
       try {
         const channelOnChain = await this.publicClient.readContract({
           address: custodyAddress,
@@ -709,12 +691,7 @@ export class SDKChannelService {
           functionName: 'getChannelData',
           args: [channelId],
         });
-        // getChannelData returns [channel, status, wallets, challengeExpiry, lastValidState]
         proofForResize = (channelOnChain as any)[4];
-        console.log(
-          '[SDKChannelService] Got proof from contract: version =',
-          proofForResize?.version?.toString(),
-        );
       } catch (err: any) {
         console.warn(
           '[SDKChannelService] Could not read lastValidState:',
@@ -865,11 +842,6 @@ export class SDKChannelService {
       ? hashWithAbsolute
       : hashWithZero;
 
-    console.log(
-      '[SDKChannelService] Using allocations:',
-      serverSignedAbsolute ? 'absolute' : 'zero',
-    );
-
     // Safety guard: with allocate_amount = 0 (documented deposit pattern) ClearNode
     // should always return non-zero allocations reflecting the deposited amount.
     // If it still returns zero allocations for any reason, submitting custody.resize()
@@ -903,23 +875,29 @@ export class SDKChannelService {
       sigs: [userResizeSig as `0x${string}`, resizeState.serverSignature],
     };
 
-    // Step 6: Submit resize transaction
+    // Step 6: Submit resize transaction.
+    // Fetch nonce explicitly (same reason as createChannel — avoids stale nonce from RPC lag).
     const proofs = proofForResize ? [proofForResize] : [];
+    const resizeNonce = await this.publicClient.getTransactionCount({
+      address: walletAccount.address,
+      blockTag: 'pending',
+    });
     const { request: simRequest } = await this.publicClient.simulateContract({
       address: custodyAddress,
       abi: CustodyAbi,
       functionName: 'resize',
       args: [channelId, signedResizeState as any, proofs as any],
       account: walletAccount,
+      nonce: resizeNonce,
     });
 
     const resizeTxHash = await this.walletClient.writeContract(
       simRequest as any,
     );
-    console.log('[SDKChannelService] Resize tx submitted:', resizeTxHash);
+    console.log(`[SDKChannelService] ✅ Channel resize tx=${resizeTxHash}`);
 
     await this.publicClient.waitForTransactionReceipt({ hash: resizeTxHash });
-    console.log('[SDKChannelService] ✅ Channel resized successfully');
+    console.log(`[SDKChannelService] ✅ Channel resized channel=${channelId}`);
 
     return {
       intent: resizeState.intent as StateIntent,
@@ -963,8 +941,6 @@ export class SDKChannelService {
     token?: Address,
     participants?: [Address, Address],
   ): Promise<ChannelState> {
-    console.log(`[SDKChannelService] Closing channel ${channelId}...`);
-
     // Step 1: Request closure from ClearNode
     const response = await this.sendRPCWithTimeoutAndRetry(
       'close_channel',
@@ -1038,10 +1014,15 @@ export class SDKChannelService {
       sigs: [userCloseSig as `0x${string}`, finalState.serverSignature],
     };
 
-    // Step 4: Submit close transaction
+    // Step 4: Submit close transaction.
+    // Fetch nonce explicitly (same reason as createChannel — avoids stale nonce from RPC lag).
     const custodyAddress =
       this.custodyAddresses[chainId] ??
       '0x0000000000000000000000000000000000000000';
+    const closeNonce = await this.publicClient.getTransactionCount({
+      address: walletAccount.address,
+      blockTag: 'pending',
+    });
     const { request: closeSimRequest } =
       await this.publicClient.simulateContract({
         address: custodyAddress,
@@ -1049,15 +1030,16 @@ export class SDKChannelService {
         functionName: 'close',
         args: [channelId, signedFinalState as any, []],
         account: walletAccount,
+        nonce: closeNonce,
       });
 
     const txHash = await this.walletClient.writeContract(
       closeSimRequest as any,
     );
-    console.log('[SDKChannelService] Close tx submitted:', txHash);
+    console.log(`[SDKChannelService] ✅ Channel close tx=${txHash}`);
 
     await this.publicClient.waitForTransactionReceipt({ hash: txHash });
-    console.log('[SDKChannelService] ✅ Channel closed successfully');
+    console.log(`[SDKChannelService] ✅ Channel closed channel=${channelId}`);
 
     return {
       intent: closeData.state.intent as StateIntent,
@@ -1088,10 +1070,6 @@ export class SDKChannelService {
    * @returns ChannelWithState or null if not found/error
    */
   async resyncChannelState(chainId: number): Promise<ChannelWithState | null> {
-    console.log(
-      `[SDKChannelService] Re-syncing channel state for chain ${chainId}...`,
-    );
-
     try {
       const response = await this.sendRPCWithTimeoutAndRetry(
         'get_channels',
@@ -1157,7 +1135,6 @@ export class SDKChannelService {
    */
   updateRPCConfig(config: Partial<RPCConfig>): void {
     this.rpcConfig = { ...this.rpcConfig, ...config };
-    console.log('[SDKChannelService] RPC config updated:', this.rpcConfig);
   }
 
   /**
