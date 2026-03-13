@@ -19,11 +19,12 @@
  * - Yellow Network handles all validation
  */
 
-import { Injectable, Inject, BadRequestException } from '@nestjs/common';
+import { Injectable, Inject } from '@nestjs/common';
 import type { IYellowNetworkPort } from '../../ports/yellow-network.port.js';
 import { YELLOW_NETWORK_PORT } from '../../ports/yellow-network.port.js';
 import type { IWalletProviderPort } from '../../ports/wallet-provider.port.js';
 import { WALLET_PROVIDER_PORT } from '../../ports/wallet-provider.port.js';
+import { PrismaService } from '../../../../database/prisma.service.js';
 import {
   UpdateAllocationDto,
   UpdateAllocationResultDto,
@@ -36,6 +37,7 @@ export class UpdateAllocationUseCase {
     private readonly yellowNetwork: IYellowNetworkPort,
     @Inject(WALLET_PROVIDER_PORT)
     private readonly walletProvider: IWalletProviderPort,
+    private readonly prisma: PrismaService,
   ) {}
 
   async execute(dto: UpdateAllocationDto): Promise<UpdateAllocationResultDto> {
@@ -60,7 +62,83 @@ export class UpdateAllocationUseCase {
       allocations: dto.allocations,
     });
 
-    // 5. Return result (NO database update)
+    // 5. Persist latest balances in local DB for deterministic totals
+    const node = await this.prisma.lightningNode.findUnique({
+      where: { appSessionId: dto.appSessionId },
+      include: { participants: true },
+    });
+
+    if (node) {
+      const participantList =
+        currentSession.definition?.participants?.length
+          ? currentSession.definition.participants
+          : node.participants.map((p) => p.address);
+      const allocs = dto.allocations ?? [];
+      const assets = [
+        ...new Set(
+          (allocs.length > 0 ? allocs : []).map((a) =>
+            a.asset?.toLowerCase?.() ?? a.asset,
+          ),
+        ),
+      ];
+      const completeAllocations: Array<{
+        participant: string;
+        asset: string;
+        amount: string;
+      }> = [];
+
+      for (const asset of assets) {
+        for (const address of participantList) {
+          const existing = allocs.find(
+            (a) =>
+              a.participant.toLowerCase() === address.toLowerCase() &&
+              (a.asset?.toLowerCase?.() ?? a.asset) === asset,
+          );
+          completeAllocations.push({
+            participant: address,
+            asset,
+            amount: existing?.amount ?? '0',
+          });
+        }
+      }
+
+      const statusByAddress = new Map(
+        node.participants.map((p) => [p.address.toLowerCase(), p.status]),
+      );
+
+      for (const alloc of completeAllocations) {
+        const existing = node.participants.find(
+          (p) =>
+            p.address.toLowerCase() === alloc.participant.toLowerCase() &&
+            p.asset.toLowerCase() === alloc.asset.toLowerCase(),
+        );
+        if (existing) {
+          await this.prisma.lightningNodeParticipant.update({
+            where: { id: existing.id },
+            data: {
+              balance: alloc.amount,
+              asset: alloc.asset,
+              lastSeenAt: new Date(),
+            },
+          });
+        } else {
+          await this.prisma.lightningNodeParticipant.create({
+            data: {
+              lightningNodeId: node.id,
+              address: alloc.participant,
+              asset: alloc.asset,
+              balance: alloc.amount,
+              weight: 0,
+              status:
+                statusByAddress.get(alloc.participant.toLowerCase()) ?? 'invited',
+              lastSeenAt: new Date(),
+            },
+          });
+        }
+      }
+    }
+
+    // 6. Return result
     return {
       appSessionId: updated.app_session_id,
       version: updated.version,

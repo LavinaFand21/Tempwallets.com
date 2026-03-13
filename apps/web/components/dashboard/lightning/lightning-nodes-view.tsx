@@ -1142,14 +1142,11 @@ function SessionManageView({
     }
   }, [session.version]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Use session balances endpoint if available; fallback to sum of allocations.
-  // This ensures the transfer slider works even if getSessionBalances returns empty.
-  const sessionTotalFromBal = balances.reduce((s, b) => s + parseFloat(b.amount || '0'), 0);
-  const sessionTotalFromAlloc = (session.allocations ?? []).reduce(
+  // Source of truth: allocations (balances are per-account and differ per user).
+  const sessionTotalNum = (session.allocations ?? []).reduce(
     (s, a) => s + parseFloat(a.amount || '0'),
     0,
   );
-  const sessionTotalNum = sessionTotalFromBal > 0 ? sessionTotalFromBal : sessionTotalFromAlloc;
   const sessionTotal = sessionTotalNum.toFixed(6);
 
   const allocTotal = allocs

@@ -12,6 +12,7 @@ import { AccountFactory } from '../factories/account.factory.js';
 import { NativeEoaFactory } from '../factories/native-eoa.factory.js';
 import { Eip7702AccountFactory } from '../factories/eip7702-account.factory.js';
 import { AddressCacheRepository } from '../repositories/address-cache.repository.js';
+import { mnemonicToAccount } from 'viem/accounts';
 import { PimlicoConfigService } from '../config/pimlico.config.js';
 
 /**
@@ -81,8 +82,9 @@ export class AddressManager implements IAddressManager {
    */
   async getAddresses(userId: string): Promise<WalletAddresses> {
     // Fast path: Check database cache first
-    const cachedAddresses =
+    let cachedAddresses =
       await this.addressCacheRepository.getCachedAddresses(userId);
+    let cacheInvalidated = false;
 
     // If we have cached addresses, check if they're complete
     if (Object.keys(cachedAddresses).length > 0) {
@@ -92,23 +94,50 @@ export class AddressManager implements IAddressManager {
       );
 
       if (hasAllChains) {
-        // We have all addresses cached, return immediately
-        this.logger.debug(
-          `Returning cached addresses from DB for user ${userId}`,
-        );
-        const partialResult =
-          this.mapCachedAddressesToWalletAddresses(cachedAddresses);
-        const result = this.ensureCompleteAddresses(partialResult);
-        const metadata = this.buildMetadata(result);
+        // Before trusting cache, ensure it matches the current seed.
+        // If the user switched/imported a new seed but cache wasn't cleared,
+        // we must invalidate and regenerate to avoid address/signature mismatch.
+        const hasSeed = await this.seedManager.hasSeed(userId);
+        if (hasSeed) {
+          const seedPhrase = await this.seedManager.getSeed(userId);
+          const derived = mnemonicToAccount(seedPhrase, {
+            accountIndex: 0,
+            addressIndex: 0,
+          }).address;
+          const cachedBase =
+            cachedAddresses['base'] ??
+            cachedAddresses['ethereum'] ??
+            cachedAddresses['arbitrum'] ??
+            cachedAddresses['polygon'];
+          if (cachedBase && cachedBase.toLowerCase() !== derived.toLowerCase()) {
+            this.logger.warn(
+              `Cached addresses are out of sync with seed for user ${userId}. ` +
+                `Clearing cache and regenerating.`,
+            );
+            await this.addressCacheRepository.clearAddresses(userId);
+            this.addressCache.delete(userId);
+            cachedAddresses = {};
+            cacheInvalidated = true;
+          } else {
+            // We have all addresses cached and seed matches, return immediately
+            this.logger.debug(
+              `Returning cached addresses from DB for user ${userId}`,
+            );
+            const partialResult =
+              this.mapCachedAddressesToWalletAddresses(cachedAddresses);
+            const result = this.ensureCompleteAddresses(partialResult);
+            const metadata = this.buildMetadata(result);
 
-        // Update in-memory cache
-        this.addressCache.set(userId, {
-          addresses: result,
-          metadata,
-          timestamp: Date.now(),
-        });
+            // Update in-memory cache
+            this.addressCache.set(userId, {
+              addresses: result,
+              metadata,
+              timestamp: Date.now(),
+            });
 
-        return result;
+            return result;
+          }
+        }
       }
     }
 
@@ -123,8 +152,9 @@ export class AddressManager implements IAddressManager {
     const seedPhrase = await this.seedManager.getSeed(userId);
 
     // Start with cached addresses, then generate missing ones
-    const cachedPartial =
-      this.mapCachedAddressesToWalletAddresses(cachedAddresses);
+    const cachedPartial = cacheInvalidated
+      ? ({} as WalletAddresses)
+      : this.mapCachedAddressesToWalletAddresses(cachedAddresses);
     const addresses: Partial<WalletAddresses> = { ...cachedPartial };
     const addressesToSave: Record<string, string> = {};
 

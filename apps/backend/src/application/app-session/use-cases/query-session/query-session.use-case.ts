@@ -126,8 +126,54 @@ export class QuerySessionUseCase {
 
     // 6. Return session data — include top-level participants, chain, and token
     //    so the frontend AppSession type is fully populated.
-    const allocations = session.allocations ?? [];
-    const token = allocations.find((a) => a.asset)?.asset ?? '';
+    //    If Yellow returns empty allocations, fall back to local DB balances.
+    const dbToken = (refreshedNode?.token ?? localNode?.token ?? '').toLowerCase();
+    const sessionAllocs = session.allocations ?? [];
+    const dbParticipants = refreshedNode?.participants ?? localNode?.participants ?? [];
+    const dbAllocs =
+      dbParticipants.length > 0
+        ? dbParticipants.map((p) => ({
+            participant: p.address,
+            asset: (p.asset || dbToken || 'usdc').toLowerCase(),
+            amount: p.balance ?? '0',
+          }))
+        : [];
+    const allocations = sessionAllocs.length > 0 ? sessionAllocs : dbAllocs;
+    const token =
+      allocations.find((a) => a.asset)?.asset || dbToken || 'usdc';
+
+    const participants = session.definition.participants || [];
+    const assets = [
+      ...new Set(
+        (allocations.length > 0 ? allocations : token ? [{ asset: token }] : []).map(
+          (a: any) => a.asset?.toLowerCase?.() ?? a.asset,
+        ),
+      ),
+    ];
+    const dbAllocMap = new Map(
+      dbAllocs.map((a) => [
+        `${a.participant.toLowerCase()}|${a.asset.toLowerCase()}`,
+        a.amount,
+      ]),
+    );
+    const completeAllocations: typeof allocations = [];
+    for (const asset of assets) {
+      for (const address of participants) {
+        const existing = allocations.find(
+          (a) =>
+            a.participant.toLowerCase() === address.toLowerCase() &&
+            a.asset.toLowerCase() === asset,
+        );
+        completeAllocations.push({
+          participant: address,
+          asset,
+          amount:
+            existing?.amount ??
+            dbAllocMap.get(`${address.toLowerCase()}|${asset.toLowerCase()}`) ??
+            '0',
+        });
+      }
+    }
 
     return {
       appSessionId: session.app_session_id,
@@ -135,7 +181,7 @@ export class QuerySessionUseCase {
       version: session.version,
       chain: dto.chain,
       token,
-      participants: (session.definition.participants || []).map((address) => ({
+      participants: participants.map((address) => ({
         address,
         joined:
           refreshedNode?.participants.some(
@@ -145,7 +191,7 @@ export class QuerySessionUseCase {
           ) ?? false,
       })),
       definition: session.definition,
-      allocations,
+      allocations: completeAllocations.length > 0 ? completeAllocations : allocations,
       sessionData: session.session_data,
     };
   }
