@@ -582,6 +582,10 @@ export function useAppSessions(
         return false;
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'Operation failed';
+        if (msg.toLowerCase().includes('unknown participant wallet')) {
+          toast.error('Counterparty has not joined yet.');
+          return false;
+        }
         // Surface OPERATE zero-sum errors with context
         if (msg.includes('zero') || msg.includes('sum') || msg.includes('delta')) {
           toast.error(

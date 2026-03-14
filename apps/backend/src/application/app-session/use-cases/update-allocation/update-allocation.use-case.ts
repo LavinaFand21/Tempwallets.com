@@ -53,6 +53,25 @@ export class UpdateAllocationUseCase {
       dto.appSessionId,
     );
 
+    // Guard: require two participants before transfers (OPERATE)
+    if (dto.intent === 'OPERATE') {
+      const participantCount =
+        currentSession.definition?.participants?.length ?? 0;
+      if (participantCount < 2) {
+        throw new BadRequestException('Counterparty has not joined yet');
+      }
+
+      const node = await this.prisma.lightningNode.findUnique({
+        where: { appSessionId: dto.appSessionId },
+        include: { participants: true },
+      });
+      const joinedCount =
+        node?.participants.filter((p) => p.status === 'joined').length ?? 0;
+      if (joinedCount < 2) {
+        throw new BadRequestException('Counterparty has not joined yet');
+      }
+    }
+
     // 4. Update allocations with Yellow Network
     const updated = await this.yellowNetwork.updateSession({
       sessionId: dto.appSessionId,

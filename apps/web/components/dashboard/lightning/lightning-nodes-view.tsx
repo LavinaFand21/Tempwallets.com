@@ -1162,6 +1162,9 @@ function SessionManageView({
   const userAllocIdxSafe = userAllocIdx >= 0 ? userAllocIdx : 0;
   const otherAllocIdx = allocs.length === 2 ? (userAllocIdxSafe === 0 ? 1 : 0) : -1;
   const myCurrentAlloc = parseFloat(allocs[userAllocIdxSafe]?.amount ?? '0');
+  const canTransfer =
+    (session.participants?.length ?? 0) === 2 &&
+    (session.participants ?? []).every((p) => p.joined);
   // Slider value derived from allocs (0 = all to counterparty, 100 = all to user)
   const sliderValue = sessionTotalNum > 0 ? (myCurrentAlloc / sessionTotalNum) * 100 : 50;
 
@@ -1319,6 +1322,11 @@ function SessionManageView({
 
           {/* Transfer (OPERATE) tab */}
           <TabsContent value="transfer" className="space-y-4 mt-3">
+            {!canTransfer && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 text-[10px] text-amber-800">
+                Counterparty has not joined yet. Transfers are disabled until both participants are present.
+              </div>
+            )}
             {allocs.length === 2 && sessionTotalNum > 0 ? (
               /* ── 2-party slider UI ── */
               <div className="space-y-4">
@@ -1403,7 +1411,7 @@ function SessionManageView({
 
                 <Button
                   onClick={handleOperate}
-                  disabled={operating}
+                  disabled={operating || !canTransfer}
                   className="w-full h-9 text-sm bg-gray-900 hover:bg-gray-700 text-white"
                 >
                   {operating ? (
@@ -1456,7 +1464,7 @@ function SessionManageView({
 
                 <Button
                   onClick={handleOperate}
-                  disabled={operating}
+                  disabled={operating || !canTransfer}
                   className="w-full h-8 text-xs bg-gray-900 hover:bg-gray-700 text-white"
                 >
                   {operating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Confirm Transfer'}
