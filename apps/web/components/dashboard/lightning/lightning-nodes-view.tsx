@@ -1162,7 +1162,9 @@ function SessionManageView({
   const myCurrentAlloc = parseFloat(allocs[userAllocIdxSafe]?.amount ?? '0');
   const canTransfer =
     (session.participants?.length ?? 0) === 2 &&
-    (session.participants ?? []).every((p) => p.joined);
+    (session.participants ?? []).every((p) =>
+      (session.allocations ?? []).some((a) => a.participant?.toLowerCase() === p.toLowerCase())
+    );
   // Slider value derived from allocs (0 = all to counterparty, 100 = all to user)
   const sliderValue = sessionTotalNum > 0 ? (myCurrentAlloc / sessionTotalNum) * 100 : 50;
 

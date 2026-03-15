@@ -91,11 +91,13 @@ export class CreateAppSessionUseCase {
     const session = AppSession.create(definition, allocations);
 
     // 9. Register with Yellow Network
-    const yellowResponse = await this.yellowNetwork.createSession({
-      sessionId: session.id.value, // Placeholder, Yellow will assign real ID
-      definition: definition.toYellowFormat(),
-      allocations: allocations.map((a) => a.toYellowFormat()),
-    });
+    // Handle the common error where funds are locked in payment channels
+    try {
+      const yellowResponse = await this.yellowNetwork.createSession({
+        sessionId: session.id.value, // Placeholder, Yellow will assign real ID
+        definition: definition.toYellowFormat(),
+        allocations: allocations.map((a) => a.toYellowFormat()),
+      });
 
     // 10. Persist deterministic participant join state
     const appSessionId = yellowResponse.app_session_id;
