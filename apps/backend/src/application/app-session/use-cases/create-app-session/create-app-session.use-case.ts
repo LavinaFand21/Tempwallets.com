@@ -89,20 +89,44 @@ export class CreateAppSessionUseCase {
     const session = AppSession.create(definition, allocations);
 
     // 9. Register with Yellow Network
-    const yellowResponse = await this.yellowNetwork.createSession({
-      sessionId: session.id.value, // Placeholder, Yellow will assign real ID
-      definition: definition.toYellowFormat(),
-      allocations: allocations.map((a) => a.toYellowFormat()),
-    });
+    // Handle the common error where funds are locked in payment channels
+    try {
+      const yellowResponse = await this.yellowNetwork.createSession({
+        sessionId: session.id.value, // Placeholder, Yellow will assign real ID
+        definition: definition.toYellowFormat(),
+        allocations: allocations.map((a) => a.toYellowFormat()),
+      });
 
-    // 10. Return result (NO database storage)
-    return {
-      appSessionId: yellowResponse.app_session_id,
-      status: yellowResponse.status,
-      version: yellowResponse.version,
-      participants: yellowResponse.definition.participants,
-      allocations: yellowResponse.allocations,
-    };
+      // 10. Return result (NO database storage)
+      return {
+        appSessionId: yellowResponse.app_session_id,
+        status: yellowResponse.status,
+        version: yellowResponse.version,
+        participants: yellowResponse.definition.participants,
+        allocations: yellowResponse.allocations,
+      };
+    } catch (error) {
+      // Check if this is the "funds locked in channel" error
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      if (errorMsg.includes('non-zero allocation') && errorMsg.includes('channel')) {
+        throw new BadRequestException(
+          'Cannot create app session: Your funds are currently locked in an active payment channel. ' +
+          '\n\n📍 Yellow Network Architecture:' +
+          '\n  • Payment Channels pull from: Custody Contract (on-chain)' +
+          '\n  • App Sessions pull from: Unified Balance (off-chain)' +
+          '\n\n✅ Solution:' +
+          '\n  1. Close your active payment channel(s) first' +
+          '\n  2. Funds will return to custody "available balance"' +
+          '\n  3. This makes them available in your "unified balance"' +
+          '\n  4. Then create the app session' +
+          '\n\n💡 Fund Flow: Payment Channel → Custody (available) → Unified Balance → App Session' +
+          '\n\nOriginal error: ' + errorMsg
+        );
+      }
+      
+      // Re-throw other errors
+      throw error;
+    }
   }
 
   /**

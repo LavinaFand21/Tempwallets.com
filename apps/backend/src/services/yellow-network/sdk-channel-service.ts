@@ -643,12 +643,14 @@ export class SDKChannelService {
     proofState?: any,
   ): Promise<ChannelState> {
     const resizeAmount = amount;
-    // allocate_amount = 0 is the documented convention for a plain custody deposit:
+    // Correct sign convention per Yellow Network 0.5.x migration guide (line 43 + 134):
     //   resize_amount = +X  → lock X from custody free into channel adjudicator (on-chain)
-    //   allocate_amount = 0 → do not move anything between unified balance and channel
-    // ClearNode credits the unified balance by the resize_amount automatically.
-    // See: docs_protocol_off-chain_channel-methods.md — Scenario 1 (Depositing Additional Funds)
-    const allocateAmount = 0n;
+    //   allocate_amount = -X → move X from channel to unified balance (off-chain credit)
+    //   Golden rule: resize_amount = -allocate_amount
+    // Net effect: custody free -X, channel 0, unified balance +X (available for app sessions)
+    // ClearNode will return allocations = [0, 0] — this is EXPECTED, not an error.
+    // See: docs_guides_migration-guide.md lines 137-142
+    const allocateAmount = -resizeAmount;
 
     // Step 1: Request resize from ClearNode with aggressive retry for indexing delays
     const response = await this.sendRPCWithTimeoutAndRetry(
@@ -842,17 +844,18 @@ export class SDKChannelService {
       ? hashWithAbsolute
       : hashWithZero;
 
-    // Safety guard: with allocate_amount = 0 (documented deposit pattern) ClearNode
-    // should always return non-zero allocations reflecting the deposited amount.
-    // If it still returns zero allocations for any reason, submitting custody.resize()
-    // with zero allocations but non-zero deltas in state.data would transfer user
-    // custody funds to clearnode — which is catastrophic. Skip the on-chain tx and
-    // surface a warning so the issue can be investigated.
+    // When allocate_amount = -resize_amount (correct deposit-to-unified pattern), ClearNode
+    // returns allocations = [0, 0] for the channel. This is EXPECTED — it means all funds
+    // were directed to the unified balance (off-chain). The on-chain tx must still proceed
+    // to transfer the custody free balance into the channel pool.
+    //
+    // SAFETY: Only skip if allocate_amount was 0 (legacy/unexpected case) AND allocs are zero.
+    // That case would dangerously transfer user custody funds to clearnode with no benefit.
     const allZeroAllocations = finalAllocations.every((a) => a.amount === 0n);
-    if (allZeroAllocations) {
+    if (allZeroAllocations && allocateAmount === 0n) {
       console.warn(
-        '[SDKChannelService] Unexpected zero allocations from ClearNode — skipping on-chain resize tx. ' +
-          'With allocate_amount=0 this should not happen. Check ClearNode state.',
+        '[SDKChannelService] Unexpected zero allocations from ClearNode with allocate_amount=0 — ' +
+          'skipping on-chain resize tx to prevent unintended fund transfer. Check ClearNode state.',
       );
       return {
         intent: resizeState.intent as StateIntent,
@@ -865,7 +868,10 @@ export class SDKChannelService {
       };
     }
 
-    // Step 5: Sign resize state (only reached when ClearNode signed non-zero allocations)
+    // Step 5: Sign resize state
+    // NOTE: zero channel allocations here are expected when allocate_amount = -resize_amount
+    // (all funds credited to unified balance). The on-chain tx correctly encodes the
+    // [resize_amount, allocate_amount] deltas in state.data for the custody contract.
     const userResizeSig = await walletAccount.sign({ hash: resizeStateHash });
     const signedResizeState = {
       intent: resizeState.intent,

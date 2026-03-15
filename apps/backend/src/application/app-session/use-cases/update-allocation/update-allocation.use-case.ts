@@ -58,17 +58,25 @@ export class UpdateAllocationUseCase {
       const participantCount =
         currentSession.definition?.participants?.length ?? 0;
       if (participantCount < 2) {
-        throw new BadRequestException('Counterparty has not joined yet');
+        throw new BadRequestException('Session must have at least 2 participants');
       }
 
-      const node = await this.prisma.lightningNode.findUnique({
-        where: { appSessionId: dto.appSessionId },
-        include: { participants: true },
-      });
-      const joinedCount =
-        node?.participants.filter((p) => p.status === 'joined').length ?? 0;
+      // Check if all participants have joined by verifying they have allocations
+      // In Yellow Network, a participant has "joined" if they have an allocation entry
+      const participants = currentSession.definition?.participants ?? [];
+      const allocations = currentSession.allocations ?? [];
+      
+      const joinedCount = participants.filter((participantAddr) =>
+        allocations.some(
+          (alloc) =>
+            alloc.participant.toLowerCase() === participantAddr.toLowerCase(),
+        ),
+      ).length;
+
       if (joinedCount < 2) {
-        throw new BadRequestException('Counterparty has not joined yet');
+        throw new BadRequestException(
+          'Counterparty has not joined yet. Transfers require all participants to have joined the session.',
+        );
       }
     }
 
