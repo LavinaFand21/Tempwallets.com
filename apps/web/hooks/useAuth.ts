@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useBrowserFingerprint } from './useBrowserFingerprint';
-import { trackAuth, identifyUser, aliasUser, resetMixpanel } from '@/lib/tempwallets-analytics';
+import { trackAuth, identifyUser, resetMixpanel } from '@/lib/tempwallets-analytics';
 import { walletStorage } from '@/lib/walletStorage';
 
 export interface User {
