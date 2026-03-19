@@ -19,7 +19,7 @@ export class QuerySessionResultDto {
   version!: number;
   chain!: string;
   token!: string;
-  participants!: string[];
+  participants!: Array<{ address: string; joined: boolean }>;
   definition!: {
     protocol: string;
     participants: string[];

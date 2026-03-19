@@ -360,10 +360,14 @@ export class YellowNetworkAdapter
       throw new BadRequestException('Not authenticated with Yellow Network');
     }
 
-    // Prefer cached allocations (complete per-participant data) over the
-    // incomplete query-derived allocations passed by the use-case.
-    const cached = this.allocationCache.get(sessionId);
-    const allocationsToSend = cached || finalAllocations;
+    // IMPORTANT:
+    // Always use `finalAllocations` supplied by the caller.
+    // The allocation cache can become stale when the frontend sends partial
+    // allocation payloads or when a previous operation failed/replayed.
+    //
+    // The close use-case is responsible for building COMPLETE allocations
+    // that sum to the session ledger totals.
+    const allocationsToSend = finalAllocations;
 
     console.log(`[YellowNetworkAdapter] Closing session=${sessionId}`);
 

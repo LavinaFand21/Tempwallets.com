@@ -28,6 +28,7 @@ import { WALLET_PROVIDER_PORT } from '../../ports/wallet-provider.port.js';
 import { AppSession } from '../../../../domain/app-session/entities/app-session.entity.js';
 import { SessionDefinition } from '../../../../domain/app-session/value-objects/session-definition.vo.js';
 import { Allocation } from '../../../../domain/app-session/value-objects/allocation.vo.js';
+import { PrismaService } from '../../../../database/prisma.service.js';
 import {
   CreateAppSessionDto,
   CreateAppSessionResultDto,
@@ -40,6 +41,7 @@ export class CreateAppSessionUseCase {
     private readonly yellowNetwork: IYellowNetworkPort,
     @Inject(WALLET_PROVIDER_PORT)
     private readonly walletProvider: IWalletProviderPort,
+    private readonly prisma: PrismaService,
   ) {}
 
   async execute(dto: CreateAppSessionDto): Promise<CreateAppSessionResultDto> {
@@ -92,7 +94,7 @@ export class CreateAppSessionUseCase {
     // Handle the common error where funds are locked in payment channels
     try {
       const yellowResponse = await this.yellowNetwork.createSession({
-        sessionId: session.id.value, // Placeholder, Yellow will assign real ID
+        sessionId: session.id.value, 
         definition: definition.toYellowFormat(),
         allocations: allocations.map((a) => a.toYellowFormat()),
       });

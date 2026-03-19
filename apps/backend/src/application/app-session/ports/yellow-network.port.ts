@@ -138,6 +138,19 @@ export interface IYellowNetworkPort {
   >;
 
   /**
+   * Get balances within a specific app session (ledger totals).
+   * Uses get_ledger_balances with app_session_id as account_id.
+   */
+  getAppSessionBalances(appSessionId: string): Promise<
+    Array<{
+      asset: string;
+      amount: string;
+      locked: string;
+      available: string;
+    }>
+  >;
+
+  /**
    * Get balances within a specific app session.
    *
    * Uses get_ledger_balances with app_session_id as account_id.

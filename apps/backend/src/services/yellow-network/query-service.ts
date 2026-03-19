@@ -533,10 +533,9 @@ export class QueryService {
       nonce,
     };
 
-    // Step 2: Get actual allocations via get_ledger_balances with app_session_id as account_id
-    // The get_app_sessions API does NOT return per-participant allocations.
-    // Per Yellow docs: "To query balance within a specific app session,
-    // provide the app_session_id as the account_id."
+    // Step 2: Do NOT synthesize per-participant allocations from ledger balances.
+    // Ledger balances are per-asset totals for the session, not per-participant.
+    // We only trust allocations from session list responses.
     const allocations: import('./types.js').AppSessionAllocation[] = [];
     try {
       const sessionBalances = await this.getAppSessionBalances(appSessionId);

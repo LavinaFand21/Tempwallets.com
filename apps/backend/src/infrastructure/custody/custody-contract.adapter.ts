@@ -16,6 +16,7 @@
  */
 
 import { Injectable, BadRequestException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { createPublicClient, createWalletClient, http, Address } from 'viem';
 import { base, arbitrum } from 'viem/chains';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -82,6 +83,7 @@ const CUSTODY_ADDRESSES: Record<number, Address> = {
 @Injectable()
 export class CustodyContractAdapter implements ICustodyContractPort {
   constructor(
+    private readonly configService: ConfigService,
     @Inject(YELLOW_NETWORK_PORT)
     private readonly yellowNetwork: IYellowNetworkPort,
     @Inject(CHANNEL_MANAGER_PORT)
@@ -97,15 +99,16 @@ export class CustodyContractAdapter implements ICustodyContractPort {
     const account = privateKeyToAccount(userPrivateKey as `0x${string}`);
     const chain = this.getChain(chainId);
 
+    const rpcUrl = this.getRpcUrl(chainId);
     const publicClient = createPublicClient({
       chain,
-      transport: http(),
+      transport: http(rpcUrl),
     });
 
     const walletClient = createWalletClient({
       account,
       chain,
-      transport: http(),
+      transport: http(rpcUrl),
     });
 
     const nonce = await publicClient.getTransactionCount({
@@ -149,15 +152,16 @@ export class CustodyContractAdapter implements ICustodyContractPort {
     const chain = this.getChain(chainId);
 
     // Use a single publicClient for both nonce fetching and receipt waiting.
+    const rpcUrl = this.getRpcUrl(chainId);
     const publicClient = createPublicClient({
       chain,
-      transport: http(),
+      transport: http(rpcUrl),
     });
 
     const walletClient = createWalletClient({
       account,
       chain,
-      transport: http(),
+      transport: http(rpcUrl),
     });
 
     // Fetch the latest confirmed nonce so we don't collide with the approve tx.
@@ -213,8 +217,13 @@ export class CustodyContractAdapter implements ICustodyContractPort {
     const custodyAddress = this.getCustodyAddress(chainId);
 
     // Single publicClient for all RPC reads and receipt waits
-    const publicClient = createPublicClient({ chain, transport: http() });
-    const walletClient = createWalletClient({ account, chain, transport: http() });
+    const rpcUrl = this.getRpcUrl(chainId);
+    const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
+    const walletClient = createWalletClient({
+      account,
+      chain,
+      transport: http(rpcUrl),
+    });
 
     // Fetch nonce once — all subsequent txs use explicit sequential nonces
     const baseNonce = await publicClient.getTransactionCount({
@@ -267,10 +276,11 @@ export class CustodyContractAdapter implements ICustodyContractPort {
     const account = privateKeyToAccount(userPrivateKey as `0x${string}`);
     const chain = this.getChain(chainId);
 
+    const rpcUrl = this.getRpcUrl(chainId);
     const walletClient = createWalletClient({
       account,
       chain,
-      transport: http(),
+      transport: http(rpcUrl),
     });
 
     console.log(`Withdrawing ${amount} tokens from custody contract...`);
@@ -311,9 +321,10 @@ export class CustodyContractAdapter implements ICustodyContractPort {
 
       console.log(`Withdraw transaction: ${hash}`);
 
+      const rpcUrl = this.getRpcUrl(chainId);
       const publicClient = createPublicClient({
         chain,
-        transport: http(),
+        transport: http(rpcUrl),
       });
 
       const receipt = await publicClient.waitForTransactionReceipt({ hash });
@@ -368,9 +379,10 @@ export class CustodyContractAdapter implements ICustodyContractPort {
     const chain = this.getChain(chainId);
     const custodyAddress = this.getCustodyAddress(chainId);
 
+    const rpcUrl = this.getRpcUrl(chainId);
     const publicClient = createPublicClient({
       chain,
-      transport: http(),
+      transport: http(rpcUrl),
     });
 
     // getAccountsBalances([[userAddress]], [tokenAddress]) → uint256[][]
@@ -514,6 +526,26 @@ export class CustodyContractAdapter implements ICustodyContractPort {
         return base;
       case 42161:
         return arbitrum;
+      default:
+        throw new Error(`Unsupported chain ID: ${chainId}`);
+    }
+  }
+
+  /**
+   * Get RPC URL for chain from env with sane defaults
+   */
+  private getRpcUrl(chainId: number): string {
+    switch (chainId) {
+      case 8453:
+        return (
+          this.configService.get<string>('BASE_RPC_URL') ||
+          'https://mainnet.base.org'
+        );
+      case 42161:
+        return (
+          this.configService.get<string>('ARB_RPC_URL') ||
+          'https://arb1.arbitrum.io/rpc'
+        );
       default:
         throw new Error(`Unsupported chain ID: ${chainId}`);
     }

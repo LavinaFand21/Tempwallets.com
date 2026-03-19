@@ -194,7 +194,7 @@ export interface AppSession {
   /** Lowercase token identifier, e.g. "usdc" */
   token: string;
   status: 'open' | 'closed' | string;
-  participants: string[];
+  participants: Array<{ address: string; joined: boolean }>;
   allocations?: SessionAllocation[];
   version?: number;
   createdAt?: string;

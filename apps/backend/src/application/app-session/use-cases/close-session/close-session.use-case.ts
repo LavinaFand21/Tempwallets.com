@@ -24,6 +24,7 @@ import { YELLOW_NETWORK_PORT } from '../../ports/yellow-network.port.js';
 import type { IWalletProviderPort } from '../../ports/wallet-provider.port.js';
 import { WALLET_PROVIDER_PORT } from '../../ports/wallet-provider.port.js';
 import { CloseSessionDto, CloseSessionResultDto } from './close-session.dto.js';
+import { PrismaService } from '../../../../database/prisma.service.js';
 
 @Injectable()
 export class CloseSessionUseCase {
@@ -32,6 +33,7 @@ export class CloseSessionUseCase {
     private readonly yellowNetwork: IYellowNetworkPort,
     @Inject(WALLET_PROVIDER_PORT)
     private readonly walletProvider: IWalletProviderPort,
+    private readonly prisma: PrismaService,
   ) {}
 
   async execute(dto: CloseSessionDto): Promise<CloseSessionResultDto> {
@@ -65,34 +67,59 @@ export class CloseSessionUseCase {
       );
     }
 
-    // 6. Build COMPLETE allocations — every participant must be listed.
-    //    Yellow Network rejects close if any participant is missing
-    //    ("asset X not fully redistributed").
+    // 6. Build COMPLETE final allocations (every participant must be listed).
+    //
+    // Yellow's `getLightningNode` allocations can be partial depending on
+    // requester; any missing participant+asset allocation must not be forced to 0,
+    // otherwise close will fail with "asset ... not fully redistributed".
+    //
+    // We fill missing values from local DB (lightning_node_participant.balance),
+    // which we maintain from Yellow state after each successful mutation.
     const allParticipants = session.definition.participants ?? [];
+    const sessionAllocs = session.allocations ?? [];
+
     const assets = [
       ...new Set(
-        (session.allocations ?? []).map((a: any) => a.asset).filter(Boolean),
+        sessionAllocs
+          .map((a: any) => a.asset?.toLowerCase?.() ?? a.asset)
+          .filter(Boolean),
       ),
     ];
-    // Default to 'usdc' if session has no allocations at all
     if (assets.length === 0) assets.push('usdc');
 
-    const completeAllocations: Array<{
+    const localNode = await this.prisma.lightningNode.findUnique({
+      where: { appSessionId: dto.appSessionId },
+      include: { participants: true },
+    });
+
+    const sessionAllocMap = new Map(
+      sessionAllocs.map((a: any) => [
+        `${String(a.participant).toLowerCase()}|${String(a.asset).toLowerCase()}`,
+        a.amount ?? '0',
+      ]),
+    );
+
+    const dbAllocMap = new Map<string, string>(
+      (localNode?.participants ?? []).map((p) => [
+        `${p.address.toLowerCase()}|${p.asset.toLowerCase()}`,
+        p.balance ?? '0',
+      ]),
+    );
+
+    const finalAllocations: Array<{
       participant: string;
       asset: string;
       amount: string;
     }> = [];
+
     for (const asset of assets) {
       for (const p of allParticipants) {
-        const existing = (session.allocations ?? []).find(
-          (a: any) =>
-            a.participant?.toLowerCase() === p.toLowerCase() &&
-            (a.asset ?? 'usdc') === asset,
-        );
-        completeAllocations.push({
+        const key = `${p.toLowerCase()}|${asset.toLowerCase()}`;
+        const amount = sessionAllocMap.get(key) ?? dbAllocMap.get(key) ?? '0';
+        finalAllocations.push({
           participant: p,
           asset,
-          amount: existing?.amount ?? '0',
+          amount,
         });
       }
     }
@@ -100,10 +127,10 @@ export class CloseSessionUseCase {
     // 7. Close session with Yellow Network
     await this.yellowNetwork.closeSession(
       dto.appSessionId,
-      completeAllocations,
+      finalAllocations,
     );
 
-    // 7. Return result
+    // 8. Return result
     return {
       appSessionId: dto.appSessionId,
       closed: true,

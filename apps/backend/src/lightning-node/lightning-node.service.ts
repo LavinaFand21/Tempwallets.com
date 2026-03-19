@@ -89,6 +89,55 @@ export class LightningNodeService {
   }
 
   /**
+   * Persist allocations from Yellow Network into our local participant records.
+   *
+   * Yellow Network may omit participants whose balance is exactly zero, which can
+   * lead to stale UI state if we only update rows that are returned. This helper
+   * ensures every participant in the Lightning Node has a row for the given asset.
+   */
+  private async syncParticipantBalances(
+    node: { id: string; participants: { address: string }[] },
+    asset: string,
+    allocations: AppSessionAllocation[],
+  ) {
+    const normalizedAsset = asset.toLowerCase();
+    const allocMap = new Map<string, string>(
+      allocations.map((a) => [a.participant.toLowerCase(), a.amount]),
+    );
+
+    const now = new Date();
+
+    for (const participant of node.participants) {
+      const address = participant.address;
+      const normalizedAddress = address.toLowerCase();
+      const amount = allocMap.get(normalizedAddress) ?? '0';
+
+      const result = await this.prisma.lightningNodeParticipant.updateMany({
+        where: {
+          lightningNodeId: node.id,
+          address: { equals: address, mode: 'insensitive' },
+          asset: normalizedAsset,
+        },
+        data: { balance: amount, lastSeenAt: now } as any,
+      });
+
+      if (result.count === 0) {
+        await this.prisma.lightningNodeParticipant.create({
+          data: {
+            lightningNodeId: node.id,
+            address,
+            asset: normalizedAsset,
+            balance: amount,
+            weight: 0,
+            status: 'invited',
+            lastSeenAt: now,
+          },
+        });
+      }
+    }
+  }
+
+  /**
    * Get user's wallet address for a given network/chain
    * Prefers normal EOA wallets (ethereum, base, etc.) over ERC-4337 wallets for signing
    * Returns both the address and whether it's an EOA wallet
@@ -1555,8 +1604,7 @@ export class LightningNodeService {
     // If depositor is NOT the creator, we need the depositor's signature too
     let extraSignatures: string[] | undefined;
     const depositorAddress = (dto.participantAddress as string).toLowerCase();
-    const isCreatorDeposit =
-      depositorAddress === creatorAddress.toLowerCase();
+    const isCreatorDeposit = depositorAddress === creatorAddress.toLowerCase();
 
     if (!isCreatorDeposit) {
       // Authenticate depositor and get their signature on the same payload
@@ -1708,16 +1756,7 @@ export class LightningNodeService {
     const updatedAllocations: AppSessionAllocation[] = (updated.allocations ||
       []) as any;
 
-    for (const alloc of updatedAllocations) {
-      await this.prisma.lightningNodeParticipant.updateMany({
-        where: {
-          lightningNodeId: node.id,
-          address: (alloc as any).participant,
-          asset: dto.asset,
-        },
-        data: { balance: (alloc as any).amount } as any,
-      });
-    }
+    await this.syncParticipantBalances(node, dto.asset, updatedAllocations);
 
     // Record transaction
     await this.prisma.lightningNodeTransaction.create({
@@ -1883,16 +1922,7 @@ export class LightningNodeService {
     const updatedAllocations: AppSessionAllocation[] = (updated.allocations ||
       []) as any;
 
-    for (const alloc of updatedAllocations) {
-      await this.prisma.lightningNodeParticipant.updateMany({
-        where: {
-          lightningNodeId: node.id,
-          address: (alloc as any).participant,
-          asset: dto.asset,
-        },
-        data: { balance: (alloc as any).amount } as any,
-      });
-    }
+    await this.syncParticipantBalances(node, dto.asset, updatedAllocations);
 
     // Record transaction
     await this.prisma.lightningNodeTransaction.create({

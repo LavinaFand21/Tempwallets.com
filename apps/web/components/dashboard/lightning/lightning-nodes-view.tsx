@@ -405,7 +405,7 @@ function CustodyActionsCard({
               value={depositAmt}
               onChange={(e) => { setDepositAmt(e.target.value); setAmountError(null); }}
               onBlur={() => setAmountError(validateAmount(depositAmt))}
-              className="h-8 text-sm mt-1 bg-white border-gray-300"
+              className="h-8 text-sm mt-1 bg-white border-gray-300 text-gray-900 placeholder:text-gray-400"
             />
             <FieldError msg={tab === 'deposit' ? amountError : null} />
           </div>
@@ -482,7 +482,7 @@ function CustodyActionsCard({
               value={withdrawAmt}
               onChange={(e) => { setWithdrawAmt(e.target.value); setAmountError(null); }}
               onBlur={() => setAmountError(validateAmount(withdrawAmt))}
-              className="h-8 text-sm mt-1 bg-white border-gray-300"
+              className="h-8 text-sm mt-1 bg-white border-gray-300 text-gray-900 placeholder:text-gray-400"
             />
             <FieldError msg={tab === 'withdraw' ? amountError : null} />
           </div>
@@ -691,21 +691,22 @@ function SessionCard({
         </span>
       </div>
 
-      {/* Participants with join status
-          Clearnode omits 'participants' in list responses, so derive from
-          allocations as a fallback (allocations always have participant addresses). */}
+      {/* Participants with join status (from backend join state) */}
       {(() => {
-        const fromParticipants = session.participants ?? [];
+        const participantEntries = session.participants ?? [];
         const fromAllocations = (session.allocations ?? []).map((a) => a.participant).filter(Boolean);
-        const addresses = fromParticipants.length > 0 ? fromParticipants : fromAllocations;
+        const joinedByAddress = new Map(
+          participantEntries.map((p) => [p.address.toLowerCase(), p.joined]),
+        );
+        const addresses =
+          participantEntries.length > 0
+            ? participantEntries.map((p) => p.address)
+            : fromAllocations;
         if (addresses.length === 0) return null;
         return (
           <div className="space-y-1">
             {addresses.map((addr) => {
-              const alloc = (session.allocations ?? []).find(
-                (a) => a.participant?.toLowerCase() === addr.toLowerCase(),
-              );
-              const hasJoined = alloc !== undefined;
+              const hasJoined = joinedByAddress.get(addr.toLowerCase()) ?? false;
               const isMe = addr.toLowerCase() === walletAddress?.toLowerCase();
               return (
                 <div key={addr} className="flex items-center justify-between text-xs">
@@ -1100,55 +1101,25 @@ function SessionManageView({
   onClose: () => Promise<boolean>;
 }) {
   const [tab, setTab] = useState<ManageTab>('info');
-  // Build allocs from FULL participants list (not just those with allocations).
-  // Participants with no allocation entry get amount "0" so the slider works.
-  const [allocs, setAllocs] = useState<{ participant: string; amount: string }[]>(() => {
-    const allocMap = new Map<string, string>();
-    (session.allocations ?? []).forEach((a) => {
-      allocMap.set(a.participant.toLowerCase(), a.amount);
-    });
-    const parts =
-      session.participants?.length > 0
-        ? session.participants
-        : (session.allocations ?? []).map((a) => a.participant).filter(Boolean);
-    return parts.map((p) => ({
-      participant: p,
-      amount: allocMap.get(p.toLowerCase()) ?? '0',
-    }));
-  });
+  const [transferAmount, setTransferAmount] = useState('');
   const [depositAmount, setDepositAmount] = useState('');
   const [withdrawAmount, setWithdrawAmount] = useState('');
-  const [allocErrors, setAllocErrors] = useState<string | null>(null);
   const [closing, setClosing] = useState(false);
 
-  // Sync allocs when fresh session detail becomes available (e.g. after loadSessionDetail)
-  useEffect(() => {
-    const allocMap = new Map<string, string>();
-    (session.allocations ?? []).forEach((a) => {
-      allocMap.set(a.participant.toLowerCase(), a.amount);
-    });
-    const parts =
-      session.participants?.length > 0
-        ? session.participants
-        : (session.allocations ?? []).map((a) => a.participant).filter(Boolean);
-    if (parts.length > 0) {
-      setAllocs(
-        parts.map((p) => ({
-          participant: p,
-          amount: allocMap.get(p.toLowerCase()) ?? '0',
-        })),
-      );
-    }
-  }, [session.version]); // eslint-disable-line react-hooks/exhaustive-deps
+  const toFixedDecimal = (units: bigint, decimals: number) => {
+    const neg = units < 0n;
+    const abs = neg ? -units : units;
+    const base = 10n ** BigInt(decimals);
+    const whole = abs / base;
+    const frac = (abs % base).toString().padStart(decimals, '0');
+    return `${neg ? '-' : ''}${whole.toString()}.${frac}`;
+  };
 
-  // Use session balances endpoint if available; fallback to sum of allocations.
-  // This ensures the transfer slider works even if getSessionBalances returns empty.
-  const sessionTotalFromBal = balances.reduce((s, b) => s + parseFloat(b.amount || '0'), 0);
-  const sessionTotalFromAlloc = (session.allocations ?? []).reduce(
+  // Source of truth: allocations (balances are per-account and differ per user).
+  const sessionTotalNum = (session.allocations ?? []).reduce(
     (s, a) => s + parseFloat(a.amount || '0'),
     0,
   );
-  const sessionTotalNum = sessionTotalFromBal > 0 ? sessionTotalFromBal : sessionTotalFromAlloc;
   const sessionTotal = sessionTotalNum.toFixed(6);
 
   const allocTotal = allocs
@@ -1178,43 +1149,121 @@ function SessionManageView({
       );
       return false;
     }
-    setAllocErrors(null);
-    return true;
+    // Otherwise, only send the participant update to avoid accidentally decreasing others.
+    return [{ participant, amount: newAmount, asset: session.token ?? DEFAULT_ASSET }];
   };
 
-  const handleOperate = async () => {
-    if (!validateOperate()) return;
-    await onPatch(
-      'OPERATE',
-      allocs.map((a) => ({
-        participant: a.participant,
-        amount: a.amount,
+  const handleTransfer = async () => {
+    const amtNum = parseFloat(transferAmount);
+    if (!transferAmount || !Number.isFinite(amtNum) || amtNum <= 0) return;
+
+    if (amtNum > myCurrentAlloc) {
+      window.alert('Insufficient balance');
+      return;
+    }
+
+    if (!meParticipant || participantAddresses.length < 2 || !counterpartyAddress) {
+      window.alert('Counterparty not joined');
+      return;
+    }
+
+    // Exact decimal arithmetic based on the raw allocation strings we got from backend.
+    // This avoids rounding/truncation that can break strict "sum == session total" validation.
+    const parseDecimal = (raw: string): { n: bigint; scale: number } => {
+      const v = String(raw).trim();
+      const neg = v.startsWith('-');
+      const unsigned = neg ? v.slice(1) : v;
+      const [wholePart, fracPart = ''] = unsigned.split('.');
+      const scale = fracPart.length;
+      const whole = wholePart && wholePart.length > 0 ? BigInt(wholePart) : 0n;
+      const frac = fracPart.length > 0 ? BigInt(fracPart) : 0n;
+      const n = whole * 10n ** BigInt(scale) + frac;
+      return { n: neg ? -n : n, scale };
+    };
+
+    const decimalToString = (n: bigint, scale: number): string => {
+      if (scale === 0) return n.toString();
+      const neg = n < 0n;
+      const abs = neg ? -n : n;
+      const base = 10n ** BigInt(scale);
+      const whole = abs / base;
+      const frac = abs % base;
+      const fracStr = frac.toString().padStart(scale, '0').replace(/0+$/, '');
+      return fracStr.length > 0 ? `${neg ? '-' : ''}${whole.toString()}.${fracStr}` : `${neg ? '-' : ''}${whole.toString()}`;
+    };
+
+    const myRaw = sessionAllocMap.get(meLower) ?? '0';
+    const otherRaw = sessionAllocMap.get(counterpartyAddress.toLowerCase()) ?? '0';
+
+    const myDec = parseDecimal(myRaw);
+    const otherDec = parseDecimal(otherRaw);
+    const amtDec = parseDecimal(transferAmount);
+
+    const commonScale = Math.max(myDec.scale, otherDec.scale, amtDec.scale);
+    const normalize = (d: { n: bigint; scale: number }) =>
+      d.n * 10n ** BigInt(commonScale - d.scale);
+
+    const myN = normalize(myDec);
+    const otherN = normalize(otherDec);
+    const amtN = normalize(amtDec);
+
+    if (amtN <= 0n) return;
+    if (amtN > myN) {
+      window.alert('Insufficient balance');
+      return;
+    }
+
+    const nextMyN = myN - amtN;
+    // Preserve exact sum by construction: nextOther = (my + other) - nextMy
+    const nextOtherN = myN + otherN - nextMyN;
+
+    await onPatch('OPERATE', [
+      {
+        participant: meParticipant,
+        amount: decimalToString(nextMyN, commonScale),
         asset: session.token ?? DEFAULT_ASSET,
-      })),
-    );
+      },
+      {
+        participant: counterpartyAddress,
+        amount: decimalToString(nextOtherN, commonScale),
+        asset: session.token ?? DEFAULT_ASSET,
+      },
+    ]);
   };
 
   const handleDeposit = async () => {
     const depositAmt = parseFloat(depositAmount);
     if (!depositAmount || depositAmt <= 0) return;
-    const participant = walletAddress ?? allocs[userAllocIdxSafe]?.participant ?? '';
+    const participant = walletAddress ?? participantAddresses[0] ?? '';
+    if (!participant) return;
+    const sessionAllocMap = getSessionAllocMap();
+    const currentAlloc = parseFloat(
+      sessionAllocMap.get(participant.toLowerCase()) ?? myCurrentAlloc.toFixed(6),
+    );
     // DEPOSIT: allocations = final desired state (current + delta)
-    const newAlloc = (myCurrentAlloc + depositAmt).toFixed(6);
-    const ok = await onPatch('DEPOSIT', [
-      { participant, amount: newAlloc, asset: session.token ?? DEFAULT_ASSET },
-    ]);
+    const newAlloc = (currentAlloc + depositAmt).toFixed(6);
+    const ok = await onPatch(
+      'DEPOSIT',
+      buildDepositWithdrawPayload(participant, newAlloc),
+    );
     if (ok) setDepositAmount('');
   };
 
   const handleWithdraw = async () => {
     const withdrawAmt = parseFloat(withdrawAmount);
     if (!withdrawAmount || withdrawAmt <= 0) return;
-    const participant = walletAddress ?? allocs[userAllocIdxSafe]?.participant ?? '';
+    const participant = walletAddress ?? participantAddresses[0] ?? '';
+    if (!participant) return;
+    const sessionAllocMap = getSessionAllocMap();
+    const currentAlloc = parseFloat(
+      sessionAllocMap.get(participant.toLowerCase()) ?? myCurrentAlloc.toFixed(6),
+    );
     // WITHDRAW: allocations = remaining amount after withdrawal (current - delta)
-    const remaining = Math.max(0, myCurrentAlloc - withdrawAmt).toFixed(6);
-    const ok = await onPatch('WITHDRAW', [
-      { participant, amount: remaining, asset: session.token ?? DEFAULT_ASSET },
-    ]);
+    const remaining = Math.max(0, currentAlloc - withdrawAmt).toFixed(6);
+    const ok = await onPatch(
+      'WITHDRAW',
+      buildDepositWithdrawPayload(participant, remaining),
+    );
     if (ok) setWithdrawAmount('');
   };
 
@@ -1276,12 +1325,20 @@ function SessionManageView({
           <TabsContent value="info" className="space-y-2 mt-2">
             <p className="text-xs font-medium text-gray-700">Participants</p>
             {(() => {
-              const fromP = session.participants ?? [];
+              const participantEntries = session.participants ?? [];
               const fromA = (session.allocations ?? []).map((a) => a.participant).filter(Boolean);
-              return (fromP.length > 0 ? fromP : fromA).map((addr) => {
+              const joinedByAddress = new Map(
+                participantEntries.map((p) => [p.address.toLowerCase(), p.joined]),
+              );
+              const addresses =
+                participantEntries.length > 0
+                  ? participantEntries.map((p) => p.address)
+                  : fromA;
+              return addresses.map((addr) => {
                 const alloc = (session.allocations ?? []).find(
                   (a) => a.participant?.toLowerCase() === addr.toLowerCase(),
                 );
+                const hasJoined = joinedByAddress.get(addr.toLowerCase()) ?? false;
                 const isMe = addr.toLowerCase() === walletAddress?.toLowerCase();
                 return (
                   <div
@@ -1295,6 +1352,13 @@ function SessionManageView({
                           You
                         </span>
                       )}
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+                          hasJoined ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-400'
+                        }`}
+                      >
+                        {hasJoined ? 'Joined' : 'Pending'}
+                      </span>
                       {alloc && (
                         <span className="text-[10px] font-medium text-gray-700">
                           {parseFloat(alloc.amount || '0').toFixed(4)} {alloc.asset?.toUpperCase()}
@@ -1423,46 +1487,27 @@ function SessionManageView({
                   )}
                 </Button>
               </div>
-            ) : (
-              /* ── N-party manual input UI ── */
-              <div className="space-y-3">
-                <p className="text-[11px] text-gray-500">
-                  Redistributes funds between all participants. Total must stay the same.
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 space-y-1">
+                <p className="text-[10px] text-gray-400 uppercase tracking-wide">Counterparty Balance</p>
+                <p className="text-lg font-rubik-medium text-gray-900 leading-none mt-1">
+                  {counterpartyAlloc.toFixed(4)}
                 </p>
-                <div className="space-y-2">
-                  {allocs.map((a, i) => (
-                    <div key={a.participant} className="bg-gray-50 rounded-lg px-3 py-2 flex items-center gap-2">
-                      <div className="flex-1 min-w-0">
-                        <p className="font-mono text-[10px] text-gray-500 truncate">{truncate(a.participant, 8)}</p>
-                        {a.participant.toLowerCase() === walletAddress?.toLowerCase() && (
-                          <span className="text-[9px] bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded-full">You</span>
-                        )}
-                      </div>
-                      <Input
-                        type="number"
-                        min="0"
-                        step="any"
-                        value={a.amount}
-                        onChange={(e) => {
-                          setAllocs((prev) => {
-                            const next = [...prev];
-                            next[i] = { participant: next[i]?.participant ?? '', amount: e.target.value };
-                            return next;
-                          });
-                        }}
-                        className="h-7 text-xs w-28 bg-white border-gray-300 text-right"
-                      />
-                    </div>
-                  ))}
-                </div>
-                <div className="flex justify-between text-xs px-1">
-                  <span className="text-gray-500">Total</span>
-                  <span className={Math.abs(parseFloat(allocTotal) - parseFloat(sessionTotal)) > 0.000001 ? 'text-red-500 font-medium' : 'text-green-600 font-medium'}>
-                    {allocTotal} / {sessionTotal}
-                  </span>
-                </div>
+                <p className="text-[10px] text-gray-400">{session.token?.toUpperCase()}</p>
+              </div>
+            </div>
 
-                <FieldError msg={allocErrors} />
+            <div>
+              <Label className="text-xs text-gray-700">Amount to send</Label>
+              <Input
+                type="number"
+                min="0"
+                step="any"
+                placeholder="0.00"
+                value={transferAmount}
+                onChange={(e) => setTransferAmount(e.target.value)}
+                className="h-8 text-sm mt-1 bg-white border-gray-300"
+              />
+            </div>
 
                 <Button
                   onClick={handleOperate}
@@ -1537,13 +1582,17 @@ function SessionManageView({
                 onChange={(e) => setWithdrawAmount(e.target.value)}
                 className="h-8 text-sm mt-1 bg-white border-gray-300"
               />
-              {withdrawAmount && Number(withdrawAmount) > myCurrentAlloc && (
+              {/* Use epsilon to avoid false positives from float precision. */}
+              {withdrawAmount &&
+                Number(withdrawAmount) > myCurrentAlloc + 1e-9 && (
                 <p className="text-xs text-red-500 mt-1">
                   Cannot exceed your allocation of {myCurrentAlloc.toFixed(4)}
                 </p>
               )}
             </div>
-            {withdrawAmount && Number(withdrawAmount) > 0 && Number(withdrawAmount) <= myCurrentAlloc && (
+            {withdrawAmount &&
+              Number(withdrawAmount) > 0 &&
+              Number(withdrawAmount) <= myCurrentAlloc + 1e-9 && (
               <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex justify-between text-xs">
                 <span className="text-gray-500">Remaining allocation</span>
                 <span className="font-medium text-amber-700">
@@ -1558,7 +1607,7 @@ function SessionManageView({
                 operating ||
                 !withdrawAmount ||
                 Number(withdrawAmount) <= 0 ||
-                Number(withdrawAmount) > myCurrentAlloc
+                Number(withdrawAmount) > myCurrentAlloc + 1e-9
               }
               className="w-full h-8 text-xs bg-black hover:bg-gray-800 text-white"
             >
@@ -1786,6 +1835,12 @@ export function LightningNodesView() {
 
             {sessions.sessions
               .filter((s) => (s.status || '').toLowerCase() !== 'closed')
+              .filter((s) => {
+                const me = auth.walletAddress?.toLowerCase();
+                if (!me) return false;
+                const self = s.participants?.find((p) => p.address.toLowerCase() === me);
+                return self?.joined === true;
+              })
               .map((s) => (
               <SessionCard
                 key={s.appSessionId}
@@ -1852,6 +1907,29 @@ export function LightningNodesView() {
                 onFound={(session) => {
                   // Normalize session data (query endpoint may return definition.participants)
                   const def = (session as any).definition;
+                  const normalizeParticipants = (
+                    participants: AppSession['participants'] | string[] | undefined,
+                    allocations: SessionAllocation[] | undefined,
+                    defParticipants?: string[],
+                  ): AppSession['participants'] => {
+                    if (participants && participants.length > 0) {
+                      const first = participants[0] as any;
+                      if (typeof first === 'string') {
+                        return (participants as string[]).map((address) => ({
+                          address,
+                          joined: false,
+                        }));
+                      }
+                      return participants as AppSession['participants'];
+                    }
+                    const fallbackList =
+                      defParticipants && defParticipants.length > 0
+                        ? defParticipants
+                        : (allocations ?? [])
+                            .map((a) => a.participant)
+                            .filter(Boolean);
+                    return fallbackList.map((address) => ({ address, joined: false }));
+                  };
                   const normalized: AppSession = {
                     ...session,
                     chain: session.chain || chain,
@@ -1859,13 +1937,11 @@ export function LightningNodesView() {
                       session.token ||
                       session.allocations?.[0]?.asset ||
                       'usdc',
-                    participants:
-                      session.participants?.length > 0
-                        ? session.participants
-                        : def?.participants ??
-                          (session.allocations ?? [])
-                            .map((a) => a.participant)
-                            .filter(Boolean),
+                    participants: normalizeParticipants(
+                      session.participants as any,
+                      session.allocations,
+                      def?.participants,
+                    ),
                   };
                   // Add to sessions list if not present
                   sessions.discoverSessions();

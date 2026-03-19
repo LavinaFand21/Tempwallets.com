@@ -26,12 +26,14 @@ import { CloseSessionUseCase } from '../../../application/app-session/use-cases/
 // Infrastructure layer - Adapter modules
 import { YellowNetworkModule } from '../../../infrastructure/yellow-network/yellow-network.module.js';
 import { WalletProviderModule } from '../../../infrastructure/wallet/wallet-provider.module.js';
+import { PrismaModule } from '../../../database/prisma.module.js';
 
 @Module({
   imports: [
     // Import infrastructure modules (provide port implementations)
     YellowNetworkModule,
     WalletProviderModule,
+    PrismaModule,
   ],
   controllers: [AppSessionController],
   providers: [
