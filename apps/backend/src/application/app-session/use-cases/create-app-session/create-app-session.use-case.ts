@@ -92,95 +92,43 @@ export class CreateAppSessionUseCase {
 
     // 9. Register with Yellow Network
     // Handle the common error where funds are locked in payment channels
-    let yellowResponse: Awaited<
-      ReturnType<IYellowNetworkPort['createSession']>
-    >;
     try {
-      yellowResponse = await this.yellowNetwork.createSession({
-        sessionId: session.id.value, // Placeholder, Yellow will assign real ID
+      const yellowResponse = await this.yellowNetwork.createSession({
+        sessionId: session.id.value, 
         definition: definition.toYellowFormat(),
         allocations: allocations.map((a) => a.toYellowFormat()),
       });
+
+      // 10. Return result (NO database storage)
+      return {
+        appSessionId: yellowResponse.app_session_id,
+        status: yellowResponse.status,
+        version: yellowResponse.version,
+        participants: yellowResponse.definition.participants,
+        allocations: yellowResponse.allocations,
+      };
     } catch (error) {
-      if (error instanceof BadRequestException) {
-        throw error;
-      }
-      const message = error instanceof Error ? error.message : String(error);
-      if (/locked/i.test(message)) {
+      // Check if this is the "funds locked in channel" error
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      if (errorMsg.includes('non-zero allocation') && errorMsg.includes('channel')) {
         throw new BadRequestException(
-          'Funds are locked in payment channels. Close channels or wait for funds to unlock.',
+          'Cannot create app session: Your funds are currently locked in an active payment channel. ' +
+          '\n\n📍 Yellow Network Architecture:' +
+          '\n  • Payment Channels pull from: Custody Contract (on-chain)' +
+          '\n  • App Sessions pull from: Unified Balance (off-chain)' +
+          '\n\n✅ Solution:' +
+          '\n  1. Close your active payment channel(s) first' +
+          '\n  2. Funds will return to custody "available balance"' +
+          '\n  3. This makes them available in your "unified balance"' +
+          '\n  4. Then create the app session' +
+          '\n\n💡 Fund Flow: Payment Channel → Custody (available) → Unified Balance → App Session' +
+          '\n\nOriginal error: ' + errorMsg
         );
       }
+      
+      // Re-throw other errors
       throw error;
     }
-
-    // 10. Persist deterministic participant join state
-    const appSessionId = yellowResponse.app_session_id;
-    const existing = await this.prisma.lightningNode.findUnique({
-      where: { appSessionId },
-      include: { participants: true },
-    });
-
-    if (!existing) {
-      const creatorLower = creatorAddress.toLowerCase();
-      const allocMap = new Map(
-        allocations.map((a) => [a.participant.toLowerCase(), a.amount]),
-      );
-      await this.prisma.lightningNode.create({
-        data: {
-          userId: dto.userId,
-          appSessionId,
-          uri: `lightning://${appSessionId}`,
-          chain: dto.chain,
-          token: dto.token.toLowerCase(),
-          status: yellowResponse.status,
-          maxParticipants: participants.length,
-          quorum,
-          protocol: definition.protocol,
-          challenge: definition.challenge,
-          sessionData: dto.sessionData,
-          participants: {
-            create: participants.map((address, idx) => {
-              const isCreator = address.toLowerCase() === creatorLower;
-              return {
-                address,
-                weight: weights[idx] ?? 0,
-                balance: allocMap.get(address.toLowerCase()) ?? '0',
-                asset: dto.token.toLowerCase(),
-                status: isCreator ? 'joined' : 'invited',
-                joinedAt: isCreator ? new Date() : undefined,
-                lastSeenAt: isCreator ? new Date() : undefined,
-              };
-            }),
-          },
-        },
-      });
-    } else {
-      // Ensure creator is marked joined (idempotent)
-      await this.prisma.lightningNodeParticipant.updateMany({
-        where: {
-          lightningNodeId: existing.id,
-          address: creatorAddress,
-        },
-        data: {
-          status: 'joined',
-          joinedAt: new Date(),
-          lastSeenAt: new Date(),
-        } as any,
-      });
-    }
-
-    // 11. Return result
-    return {
-      appSessionId,
-      status: yellowResponse.status,
-      version: yellowResponse.version,
-      participants: yellowResponse.definition.participants.map((address) => ({
-        address,
-        joined: address.toLowerCase() === creatorAddress.toLowerCase(),
-      })),
-      allocations: yellowResponse.allocations,
-    };
   }
 
   /**

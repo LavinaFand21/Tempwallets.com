@@ -1122,58 +1122,32 @@ function SessionManageView({
   );
   const sessionTotal = sessionTotalNum.toFixed(6);
 
-  const participantAddresses = (session.participants ?? [])
-    .map((p) => (typeof p === 'string' ? p : p?.address))
-    .filter((p): p is string => typeof p === 'string' && p.length > 0);
-  const sessionAllocMap = new Map<string, string>();
-  (session.allocations ?? []).forEach((a) => {
-    if (!a.participant) return;
-    sessionAllocMap.set(a.participant.toLowerCase(), a.amount ?? '0');
-  });
+  const allocTotal = allocs
+    .reduce((s, a) => s + parseFloat(a.amount || '0'), 0)
+    .toFixed(6);
 
-  const walletLower = walletAddress?.toLowerCase() ?? '';
-  const meParticipant =
-    walletLower && participantAddresses.length > 0
-      ? participantAddresses.find((p) => p.toLowerCase() === walletLower) ?? null
-      : participantAddresses[0] ?? null;
+  // Derived: find current user's allocation index
+  const userAllocIdx = walletAddress
+    ? allocs.findIndex((a) => a.participant.toLowerCase() === walletAddress.toLowerCase())
+    : 0;
+  const userAllocIdxSafe = userAllocIdx >= 0 ? userAllocIdx : 0;
+  const otherAllocIdx = allocs.length === 2 ? (userAllocIdxSafe === 0 ? 1 : 0) : -1;
+  const myCurrentAlloc = parseFloat(allocs[userAllocIdxSafe]?.amount ?? '0');
+  const canTransfer =
+    (session.participants?.length ?? 0) === 2 &&
+    (session.participants ?? []).every((p) =>
+      (session.allocations ?? []).some((a) => a.participant?.toLowerCase() === p.toLowerCase())
+    );
+  // Slider value derived from allocs (0 = all to counterparty, 100 = all to user)
+  const sliderValue = sessionTotalNum > 0 ? (myCurrentAlloc / sessionTotalNum) * 100 : 50;
 
-  const meLower = meParticipant?.toLowerCase() ?? '';
-  const counterpartyAddress =
-    participantAddresses.length >= 2 && meLower
-      ? participantAddresses.find((a) => a.toLowerCase() !== meLower) ?? participantAddresses[1]!
-      : '';
-
-  const myCurrentAlloc = parseFloat(sessionAllocMap.get(meLower) ?? '0');
-  const counterpartyAlloc = parseFloat(
-    counterpartyAddress ? sessionAllocMap.get(counterpartyAddress.toLowerCase()) ?? '0' : '0',
-  );
-
-  const canTransfer = Boolean(meParticipant && counterpartyAddress && participantAddresses.length >= 2);
-
-  const getSessionAllocMap = () => {
-    const map = new Map<string, string>();
-    (session.allocations ?? []).forEach((a) => {
-      map.set(a.participant.toLowerCase(), a.amount);
-    });
-    return map;
-  };
-
-  const hasCompleteSessionAllocs =
-    (session.participants?.length ?? 0) > 0 &&
-    (session.allocations?.length ?? 0) === (session.participants?.length ?? 0);
-
-  const buildDepositWithdrawPayload = (participant: string, newAmount: string) => {
-    // If session allocations are complete, preserve everyone else exactly as returned by API.
-    if (hasCompleteSessionAllocs) {
-      const sessionAllocMap = getSessionAllocMap();
-      return (session.participants ?? []).map((p) => ({
-        participant: p.address,
-        amount:
-          p.address.toLowerCase() === participant.toLowerCase()
-            ? newAmount
-            : sessionAllocMap.get(p.address.toLowerCase()) ?? '0',
-        asset: session.token ?? DEFAULT_ASSET,
-      }));
+  const validateOperate = (): boolean => {
+    const diff = Math.abs(parseFloat(allocTotal) - parseFloat(sessionTotal));
+    if (diff > 0.000001) {
+      setAllocErrors(
+        `Allocations must sum to exactly ${sessionTotal} (current total). Got ${allocTotal}.`,
+      );
+      return false;
     }
     // Otherwise, only send the participant update to avoid accidentally decreasing others.
     return [{ participant, amount: newAmount, asset: session.token ?? DEFAULT_ASSET }];
@@ -1416,17 +1390,102 @@ function SessionManageView({
           <TabsContent value="transfer" className="space-y-4 mt-3">
             {!canTransfer && (
               <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 text-[10px] text-amber-800">
-                Counterparty not joined.
+                Counterparty has not joined yet. Transfers are disabled until both participants are present.
               </div>
             )}
+            {allocs.length === 2 && sessionTotalNum > 0 ? (
+              /* ── 2-party slider UI ── */
+              <div className="space-y-4">
+                {/* Participant balance cards */}
+                <div className="grid grid-cols-2 gap-2">
+                  {/* Counterparty */}
+                  <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 space-y-1">
+                    <p className="text-[10px] text-gray-400 uppercase tracking-wide">Counterparty</p>
+                    <p className="font-mono text-[10px] text-gray-500 truncate">
+                      {truncate(allocs[otherAllocIdx]?.participant ?? '', 6)}
+                    </p>
+                    <p className="text-lg font-rubik-medium text-gray-900 leading-none mt-1">
+                      {parseFloat(allocs[otherAllocIdx]?.amount ?? '0').toFixed(4)}
+                    </p>
+                    <p className="text-[10px] text-gray-400">{session.token?.toUpperCase()}</p>
+                  </div>
 
-            <div className="grid grid-cols-2 gap-2">
-              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 space-y-1">
-                <p className="text-[10px] text-gray-400 uppercase tracking-wide">Your Balance</p>
-                <p className="text-lg font-rubik-medium text-gray-900 leading-none mt-1">
-                  {myCurrentAlloc.toFixed(4)}
-                </p>
-                <p className="text-[10px] text-gray-400">{session.token?.toUpperCase()}</p>
+                  {/* You */}
+                  <div className="bg-gray-900 border border-gray-800 rounded-xl p-3 space-y-1">
+                    <p className="text-[10px] text-gray-400 uppercase tracking-wide">You</p>
+                    <p className="font-mono text-[10px] text-gray-500 truncate">
+                      {truncate(allocs[userAllocIdxSafe]?.participant ?? '', 6)}
+                    </p>
+                    <p className="text-lg font-rubik-medium text-white leading-none mt-1">
+                      {parseFloat(allocs[userAllocIdxSafe]?.amount ?? '0').toFixed(4)}
+                    </p>
+                    <p className="text-[10px] text-gray-400">{session.token?.toUpperCase()}</p>
+                  </div>
+                </div>
+
+                {/* Slider */}
+                <div className="space-y-2">
+                  {/* Visual split bar */}
+                  <div className="relative h-2 rounded-full bg-gray-200 overflow-hidden">
+                    <div
+                      className="absolute inset-y-0 right-0 bg-gray-900 rounded-full transition-all"
+                      style={{ width: `${sliderValue}%` }}
+                    />
+                  </div>
+
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={0.01}
+                    value={sliderValue}
+                    onChange={(e) => {
+                      const pct = parseFloat(e.target.value);
+                      const userNew = (pct / 100) * sessionTotalNum;
+                      const otherNew = sessionTotalNum - userNew;
+                      setAllocs((prev) => {
+                        const next = [...prev];
+                        next[userAllocIdxSafe] = {
+                          participant: next[userAllocIdxSafe]?.participant ?? '',
+                          amount: userNew.toFixed(6),
+                        };
+                        next[otherAllocIdx] = {
+                          participant: next[otherAllocIdx]?.participant ?? '',
+                          amount: otherNew.toFixed(6),
+                        };
+                        return next;
+                      });
+                    }}
+                    className="w-full appearance-none bg-transparent cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-gray-900 [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-white [&::-webkit-slider-thumb]:shadow-md [&::-webkit-slider-runnable-track]:h-0 [&::-moz-range-thumb]:h-5 [&::-moz-range-thumb]:w-5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-gray-900 [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-white [&::-moz-range-thumb]:shadow-md [&::-moz-range-thumb]:border-none"
+                  />
+
+                  <div className="flex justify-between text-[10px] text-gray-400">
+                    <span>All to counterparty</span>
+                    <span>All to you</span>
+                  </div>
+                </div>
+
+                {/* Total row */}
+                <div className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2 text-xs">
+                  <span className="text-gray-500">Session total</span>
+                  <span className="font-rubik-medium text-gray-900">
+                    {sessionTotalNum.toFixed(4)} {session.token?.toUpperCase()}
+                  </span>
+                </div>
+
+                <FieldError msg={allocErrors} />
+
+                <Button
+                  onClick={handleOperate}
+                  disabled={operating || !canTransfer}
+                  className="w-full h-9 text-sm bg-gray-900 hover:bg-gray-700 text-white"
+                >
+                  {operating ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    'Confirm Transfer'
+                  )}
+                </Button>
               </div>
               <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 space-y-1">
                 <p className="text-[10px] text-gray-400 uppercase tracking-wide">Counterparty Balance</p>
@@ -1450,13 +1509,15 @@ function SessionManageView({
               />
             </div>
 
-            <Button
-              onClick={handleTransfer}
-              disabled={operating || !transferAmount || Number(transferAmount) <= 0 || !canTransfer}
-              className="w-full h-9 text-sm bg-gray-900 hover:bg-gray-700 text-white"
-            >
-              {operating ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Send to Counterparty'}
-            </Button>
+                <Button
+                  onClick={handleOperate}
+                  disabled={operating || !canTransfer}
+                  className="w-full h-8 text-xs bg-gray-900 hover:bg-gray-700 text-white"
+                >
+                  {operating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Confirm Transfer'}
+                </Button>
+              </div>
+            )}
           </TabsContent>
 
           {/* Deposit to session tab */}
