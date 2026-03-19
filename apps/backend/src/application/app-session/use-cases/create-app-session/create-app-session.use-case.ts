@@ -92,12 +92,27 @@ export class CreateAppSessionUseCase {
 
     // 9. Register with Yellow Network
     // Handle the common error where funds are locked in payment channels
+    let yellowResponse: Awaited<
+      ReturnType<IYellowNetworkPort['createSession']>
+    >;
     try {
-      const yellowResponse = await this.yellowNetwork.createSession({
+      yellowResponse = await this.yellowNetwork.createSession({
         sessionId: session.id.value, // Placeholder, Yellow will assign real ID
         definition: definition.toYellowFormat(),
         allocations: allocations.map((a) => a.toYellowFormat()),
       });
+    } catch (error) {
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      if (/locked/i.test(message)) {
+        throw new BadRequestException(
+          'Funds are locked in payment channels. Close channels or wait for funds to unlock.',
+        );
+      }
+      throw error;
+    }
 
     // 10. Persist deterministic participant join state
     const appSessionId = yellowResponse.app_session_id;
