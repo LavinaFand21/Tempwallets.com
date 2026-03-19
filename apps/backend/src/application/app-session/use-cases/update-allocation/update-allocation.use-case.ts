@@ -63,17 +63,50 @@ export class UpdateAllocationUseCase {
         throw new BadRequestException('Session must have at least 2 participants');
       }
 
-      // Check if all participants have joined by verifying they have allocations
-      // In Yellow Network, a participant has "joined" if they have an allocation entry
       const participants = currentSession.definition?.participants ?? [];
       const allocations = currentSession.allocations ?? [];
-      
-      const joinedCount = participants.filter((participantAddr) =>
-        allocations.some(
-          (alloc) =>
-            alloc.participant.toLowerCase() === participantAddr.toLowerCase(),
-        ),
-      ).length;
+
+      const node = await this.prisma.lightningNode.findUnique({
+        where: { appSessionId: dto.appSessionId },
+        include: { participants: true },
+      });
+
+      // A participant can be considered "joined" if either:
+      // 1) local DB marks them joined (deterministic after QuerySession), or
+      // 2) Yellow session allocations include their allocation entry.
+      //
+      // Yellow can return partial allocations depending on who queried,
+      // so we always allow DB join-state when available.
+      const joinedByDbSet = new Set(
+        (node?.participants ?? [])
+          .filter((p) => p.status === 'joined')
+          .map((p) => p.address.toLowerCase()),
+      );
+      const allocJoinedSet = new Set(
+        allocations
+          .map((alloc) => (alloc.participant ?? '').toLowerCase())
+          .filter(Boolean),
+      );
+
+      const participantDebug = participants.map((participantAddr) => {
+        const addrLower = participantAddr.toLowerCase();
+        const joinedByDb = joinedByDbSet.has(addrLower);
+        const joinedByAlloc = allocJoinedSet.has(addrLower);
+        return { addr: addrLower, joinedByDb, joinedByAlloc };
+      });
+
+      // Temporary diagnostic log: helps confirm why join-guard blocks OPERATE.
+      // Remove once fixed.
+      // eslint-disable-next-line no-console
+      console.log('[UpdateAllocationUseCase][OPERATE join-guard]', {
+        appSessionId: dto.appSessionId,
+        participantCount,
+        dbNodeFound: Boolean(node),
+        participantDebug,
+        yellowAllocationParticipants: Array.from(allocJoinedSet),
+      });
+
+      const joinedCount = participantDebug.filter((p) => p.joinedByDb || p.joinedByAlloc).length;
 
       if (joinedCount < 2) {
         throw new BadRequestException(
@@ -97,10 +130,18 @@ export class UpdateAllocationUseCase {
 
     if (node) {
       const participantList =
-        currentSession.definition?.participants?.length
-          ? currentSession.definition.participants
-          : node.participants.map((p) => p.address);
-      const allocs = dto.allocations ?? [];
+        updated.definition?.participants?.length
+          ? updated.definition.participants
+          : currentSession.definition?.participants?.length
+            ? currentSession.definition.participants
+            : node.participants.map((p) => p.address);
+
+      // IMPORTANT:
+      // YellowNetworkAdapter.updateSession expects/caches COMPLETE per-participant
+      // allocations. The client payload may be partial (e.g. DEPOSIT/WITHDRAW),
+      // so persisting from dto.allocations can incorrectly zero out other
+      // participants' balances and cause inconsistent session totals.
+      const allocs = updated.allocations ?? dto.allocations ?? [];
       const assets = [
         ...new Set(
           (allocs.length > 0 ? allocs : []).map((a) =>

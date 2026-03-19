@@ -24,34 +24,7 @@ import { YELLOW_NETWORK_PORT } from '../../ports/yellow-network.port.js';
 import type { IWalletProviderPort } from '../../ports/wallet-provider.port.js';
 import { WALLET_PROVIDER_PORT } from '../../ports/wallet-provider.port.js';
 import { CloseSessionDto, CloseSessionResultDto } from './close-session.dto.js';
-
-// Safe decimal math (Yellow uses string amounts, avoid floats)
-const DECIMAL_PRECISION = 18;
-
-function toFixedPoint(value: string): bigint {
-  const trimmed = value.trim();
-  const negative = trimmed.startsWith('-');
-  const abs = negative ? trimmed.slice(1) : trimmed;
-  const [intPart = '0', decPart = ''] = abs.split('.');
-  const padded = decPart.padEnd(DECIMAL_PRECISION, '0').slice(0, DECIMAL_PRECISION);
-  const result = BigInt(intPart + padded);
-  return negative ? -result : result;
-}
-
-function fromFixedPoint(value: bigint): string {
-  const negative = value < 0n;
-  const abs = negative ? -value : value;
-  const str = abs.toString().padStart(DECIMAL_PRECISION + 1, '0');
-  const intPart = str.slice(0, str.length - DECIMAL_PRECISION) || '0';
-  const decPart = str.slice(str.length - DECIMAL_PRECISION);
-  const trimmed = decPart.replace(/0+$/, '');
-  const finalDec = trimmed.length < 2 ? decPart.slice(0, 2) : trimmed;
-  return `${negative ? '-' : ''}${intPart}.${finalDec}`;
-}
-
-function addDecimal(a: string, b: string): string {
-  return fromFixedPoint(toFixedPoint(a) + toFixedPoint(b));
-}
+import { PrismaService } from '../../../../database/prisma.service.js';
 
 @Injectable()
 export class CloseSessionUseCase {
@@ -60,6 +33,7 @@ export class CloseSessionUseCase {
     private readonly yellowNetwork: IYellowNetworkPort,
     @Inject(WALLET_PROVIDER_PORT)
     private readonly walletProvider: IWalletProviderPort,
+    private readonly prisma: PrismaService,
   ) {}
 
   async execute(dto: CloseSessionDto): Promise<CloseSessionResultDto> {
@@ -93,62 +67,70 @@ export class CloseSessionUseCase {
       );
     }
 
-    // 6. Build COMPLETE allocations — every participant must be listed.
-    //    Yellow Network rejects close if any participant is missing
-    //    ("asset X not fully redistributed").
+    // 6. Build COMPLETE final allocations (every participant must be listed).
+    //
+    // Yellow's `getLightningNode` allocations can be partial depending on
+    // requester; any missing participant+asset allocation must not be forced to 0,
+    // otherwise close will fail with "asset ... not fully redistributed".
+    //
+    // We fill missing values from local DB (lightning_node_participant.balance),
+    // which we maintain from Yellow state after each successful mutation.
     const allParticipants = session.definition.participants ?? [];
-    const sessionBalances = await this.yellowNetwork.getAppSessionBalances(
-      dto.appSessionId,
-    );
+    const sessionAllocs = session.allocations ?? [];
 
     const assets = [
       ...new Set(
-        (sessionBalances ?? [])
-          .map((b: any) => b.asset?.toLowerCase?.() ?? b.asset)
+        sessionAllocs
+          .map((a: any) => a.asset?.toLowerCase?.() ?? a.asset)
           .filter(Boolean),
       ),
     ];
-    // Default to 'usdc' if session has no balances at all
     if (assets.length === 0) assets.push('usdc');
 
-    // Calculate totals per asset from ledger balances, then redistribute all funds to caller
-    const totalsByAsset = new Map<string, string>();
-    for (const bal of sessionBalances ?? []) {
-      const asset = (bal.asset?.toLowerCase?.() ?? bal.asset ?? 'usdc') as string;
-      const current = totalsByAsset.get(asset) ?? '0';
-      totalsByAsset.set(asset, addDecimal(current, bal.amount ?? '0'));
-    }
+    const localNode = await this.prisma.lightningNode.findUnique({
+      where: { appSessionId: dto.appSessionId },
+      include: { participants: true },
+    });
 
-    const redistributeAllocations: Array<{
+    const sessionAllocMap = new Map(
+      sessionAllocs.map((a: any) => [
+        `${String(a.participant).toLowerCase()}|${String(a.asset).toLowerCase()}`,
+        a.amount ?? '0',
+      ]),
+    );
+
+    const dbAllocMap = new Map<string, string>(
+      (localNode?.participants ?? []).map((p) => [
+        `${p.address.toLowerCase()}|${p.asset.toLowerCase()}`,
+        p.balance ?? '0',
+      ]),
+    );
+
+    const finalAllocations: Array<{
       participant: string;
       asset: string;
       amount: string;
     }> = [];
+
     for (const asset of assets) {
-      const total = totalsByAsset.get(asset) ?? '0';
       for (const p of allParticipants) {
-        redistributeAllocations.push({
+        const key = `${p.toLowerCase()}|${asset.toLowerCase()}`;
+        const amount = sessionAllocMap.get(key) ?? dbAllocMap.get(key) ?? '0';
+        finalAllocations.push({
           participant: p,
           asset,
-          amount: p.toLowerCase() === walletAddress.toLowerCase() ? total : '0',
+          amount,
         });
       }
     }
 
-    // 7. Force redistribute (OPERATE) so close will succeed
-    await this.yellowNetwork.updateSession({
-      sessionId: dto.appSessionId,
-      intent: 'OPERATE',
-      allocations: redistributeAllocations,
-    });
-
-    // 8. Close session with Yellow Network
+    // 7. Close session with Yellow Network
     await this.yellowNetwork.closeSession(
       dto.appSessionId,
-      redistributeAllocations,
+      finalAllocations,
     );
 
-    // 9. Return result
+    // 8. Return result
     return {
       appSessionId: dto.appSessionId,
       closed: true,

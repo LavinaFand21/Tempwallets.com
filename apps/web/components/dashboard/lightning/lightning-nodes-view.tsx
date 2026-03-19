@@ -1101,46 +1101,19 @@ function SessionManageView({
   onClose: () => Promise<boolean>;
 }) {
   const [tab, setTab] = useState<ManageTab>('info');
-  // Build allocs from FULL participants list (not just those with allocations).
-  // Participants with no allocation entry get amount "0" so the slider works.
-  const [allocs, setAllocs] = useState<{ participant: string; amount: string }[]>(() => {
-    const allocMap = new Map<string, string>();
-    (session.allocations ?? []).forEach((a) => {
-      allocMap.set(a.participant.toLowerCase(), a.amount);
-    });
-    const parts =
-      session.participants?.length > 0
-        ? session.participants.map((p) => p.address)
-        : (session.allocations ?? []).map((a) => a.participant).filter(Boolean);
-    return parts.map((p) => ({
-      participant: p,
-      amount: allocMap.get(p.toLowerCase()) ?? '0',
-    }));
-  });
+  const [transferAmount, setTransferAmount] = useState('');
   const [depositAmount, setDepositAmount] = useState('');
   const [withdrawAmount, setWithdrawAmount] = useState('');
-  const [allocErrors, setAllocErrors] = useState<string | null>(null);
   const [closing, setClosing] = useState(false);
 
-  // Sync allocs when fresh session detail becomes available (e.g. after loadSessionDetail)
-  useEffect(() => {
-    const allocMap = new Map<string, string>();
-    (session.allocations ?? []).forEach((a) => {
-      allocMap.set(a.participant.toLowerCase(), a.amount);
-    });
-    const parts =
-      session.participants?.length > 0
-        ? session.participants.map((p) => p.address)
-        : (session.allocations ?? []).map((a) => a.participant).filter(Boolean);
-    if (parts.length > 0) {
-      setAllocs(
-        parts.map((p) => ({
-          participant: p,
-          amount: allocMap.get(p.toLowerCase()) ?? '0',
-        })),
-      );
-    }
-  }, [session.version]); // eslint-disable-line react-hooks/exhaustive-deps
+  const toFixedDecimal = (units: bigint, decimals: number) => {
+    const neg = units < 0n;
+    const abs = neg ? -units : units;
+    const base = 10n ** BigInt(decimals);
+    const whole = abs / base;
+    const frac = (abs % base).toString().padStart(decimals, '0');
+    return `${neg ? '-' : ''}${whole.toString()}.${frac}`;
+  };
 
   // Source of truth: allocations (balances are per-account and differ per user).
   const sessionTotalNum = (session.allocations ?? []).reduce(
@@ -1149,46 +1122,33 @@ function SessionManageView({
   );
   const sessionTotal = sessionTotalNum.toFixed(6);
 
-  const allocTotal = allocs
-    .reduce((s, a) => s + parseFloat(a.amount || '0'), 0)
-    .toFixed(6);
+  const participantAddresses = (session.participants ?? [])
+    .map((p) => (typeof p === 'string' ? p : p?.address))
+    .filter((p): p is string => typeof p === 'string' && p.length > 0);
+  const sessionAllocMap = new Map<string, string>();
+  (session.allocations ?? []).forEach((a) => {
+    if (!a.participant) return;
+    sessionAllocMap.set(a.participant.toLowerCase(), a.amount ?? '0');
+  });
 
-  // Derived: find current user's allocation index
-  const userAllocIdx = walletAddress
-    ? allocs.findIndex((a) => a.participant.toLowerCase() === walletAddress.toLowerCase())
-    : 0;
-  const userAllocIdxSafe = userAllocIdx >= 0 ? userAllocIdx : 0;
-  const otherAllocIdx = allocs.length === 2 ? (userAllocIdxSafe === 0 ? 1 : 0) : -1;
-  const myCurrentAlloc = parseFloat(allocs[userAllocIdxSafe]?.amount ?? '0');
-  const canTransfer =
-    (session.participants?.length ?? 0) === 2 &&
-    (session.participants ?? []).every((p) =>
-      (session.allocations ?? []).some((a) => a.participant?.toLowerCase() === p.toLowerCase())
-    );
-  // Slider value derived from allocs (0 = all to counterparty, 100 = all to user)
-  const sliderValue = sessionTotalNum > 0 ? (myCurrentAlloc / sessionTotalNum) * 100 : 50;
+  const walletLower = walletAddress?.toLowerCase() ?? '';
+  const meParticipant =
+    walletLower && participantAddresses.length > 0
+      ? participantAddresses.find((p) => p.toLowerCase() === walletLower) ?? null
+      : participantAddresses[0] ?? null;
 
-  const validateOperate = (): boolean => {
-    const diff = Math.abs(parseFloat(allocTotal) - parseFloat(sessionTotal));
-    if (diff > 0.000001) {
-      setAllocErrors(
-        `Allocations must sum to exactly ${sessionTotal} (current total). Got ${allocTotal}.`,
-      );
-      return false;
-    }
-    setAllocErrors(null);
-    return true;
-  };
+  const meLower = meParticipant?.toLowerCase() ?? '';
+  const counterpartyAddress =
+    participantAddresses.length >= 2 && meLower
+      ? participantAddresses.find((a) => a.toLowerCase() !== meLower) ?? participantAddresses[1]!
+      : '';
 
-  const buildAllocationsPayload = (overrides: Record<string, string> = {}) =>
-    allocs.map((a) => {
-      const key = a.participant.toLowerCase();
-      return {
-        participant: a.participant,
-        amount: overrides[key] ?? a.amount ?? '0',
-        asset: session.token ?? DEFAULT_ASSET,
-      };
-    });
+  const myCurrentAlloc = parseFloat(sessionAllocMap.get(meLower) ?? '0');
+  const counterpartyAlloc = parseFloat(
+    counterpartyAddress ? sessionAllocMap.get(counterpartyAddress.toLowerCase()) ?? '0' : '0',
+  );
+
+  const canTransfer = Boolean(meParticipant && counterpartyAddress && participantAddresses.length >= 2);
 
   const getSessionAllocMap = () => {
     const map = new Map<string, string>();
@@ -1219,18 +1179,88 @@ function SessionManageView({
     return [{ participant, amount: newAmount, asset: session.token ?? DEFAULT_ASSET }];
   };
 
-  const handleOperate = async () => {
-    if (!validateOperate()) return;
-    await onPatch(
-      'OPERATE',
-      buildAllocationsPayload(),
-    );
+  const handleTransfer = async () => {
+    const amtNum = parseFloat(transferAmount);
+    if (!transferAmount || !Number.isFinite(amtNum) || amtNum <= 0) return;
+
+    if (amtNum > myCurrentAlloc) {
+      window.alert('Insufficient balance');
+      return;
+    }
+
+    if (!meParticipant || participantAddresses.length < 2 || !counterpartyAddress) {
+      window.alert('Counterparty not joined');
+      return;
+    }
+
+    // Exact decimal arithmetic based on the raw allocation strings we got from backend.
+    // This avoids rounding/truncation that can break strict "sum == session total" validation.
+    const parseDecimal = (raw: string): { n: bigint; scale: number } => {
+      const v = String(raw).trim();
+      const neg = v.startsWith('-');
+      const unsigned = neg ? v.slice(1) : v;
+      const [wholePart, fracPart = ''] = unsigned.split('.');
+      const scale = fracPart.length;
+      const whole = wholePart && wholePart.length > 0 ? BigInt(wholePart) : 0n;
+      const frac = fracPart.length > 0 ? BigInt(fracPart) : 0n;
+      const n = whole * 10n ** BigInt(scale) + frac;
+      return { n: neg ? -n : n, scale };
+    };
+
+    const decimalToString = (n: bigint, scale: number): string => {
+      if (scale === 0) return n.toString();
+      const neg = n < 0n;
+      const abs = neg ? -n : n;
+      const base = 10n ** BigInt(scale);
+      const whole = abs / base;
+      const frac = abs % base;
+      const fracStr = frac.toString().padStart(scale, '0').replace(/0+$/, '');
+      return fracStr.length > 0 ? `${neg ? '-' : ''}${whole.toString()}.${fracStr}` : `${neg ? '-' : ''}${whole.toString()}`;
+    };
+
+    const myRaw = sessionAllocMap.get(meLower) ?? '0';
+    const otherRaw = sessionAllocMap.get(counterpartyAddress.toLowerCase()) ?? '0';
+
+    const myDec = parseDecimal(myRaw);
+    const otherDec = parseDecimal(otherRaw);
+    const amtDec = parseDecimal(transferAmount);
+
+    const commonScale = Math.max(myDec.scale, otherDec.scale, amtDec.scale);
+    const normalize = (d: { n: bigint; scale: number }) =>
+      d.n * 10n ** BigInt(commonScale - d.scale);
+
+    const myN = normalize(myDec);
+    const otherN = normalize(otherDec);
+    const amtN = normalize(amtDec);
+
+    if (amtN <= 0n) return;
+    if (amtN > myN) {
+      window.alert('Insufficient balance');
+      return;
+    }
+
+    const nextMyN = myN - amtN;
+    // Preserve exact sum by construction: nextOther = (my + other) - nextMy
+    const nextOtherN = myN + otherN - nextMyN;
+
+    await onPatch('OPERATE', [
+      {
+        participant: meParticipant,
+        amount: decimalToString(nextMyN, commonScale),
+        asset: session.token ?? DEFAULT_ASSET,
+      },
+      {
+        participant: counterpartyAddress,
+        amount: decimalToString(nextOtherN, commonScale),
+        asset: session.token ?? DEFAULT_ASSET,
+      },
+    ]);
   };
 
   const handleDeposit = async () => {
     const depositAmt = parseFloat(depositAmount);
     if (!depositAmount || depositAmt <= 0) return;
-    const participant = walletAddress ?? allocs[userAllocIdxSafe]?.participant ?? '';
+    const participant = walletAddress ?? participantAddresses[0] ?? '';
     if (!participant) return;
     const sessionAllocMap = getSessionAllocMap();
     const currentAlloc = parseFloat(
@@ -1248,7 +1278,7 @@ function SessionManageView({
   const handleWithdraw = async () => {
     const withdrawAmt = parseFloat(withdrawAmount);
     if (!withdrawAmount || withdrawAmt <= 0) return;
-    const participant = walletAddress ?? allocs[userAllocIdxSafe]?.participant ?? '';
+    const participant = walletAddress ?? participantAddresses[0] ?? '';
     if (!participant) return;
     const sessionAllocMap = getSessionAllocMap();
     const currentAlloc = parseFloat(
@@ -1386,153 +1416,47 @@ function SessionManageView({
           <TabsContent value="transfer" className="space-y-4 mt-3">
             {!canTransfer && (
               <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 text-[10px] text-amber-800">
-                Counterparty has not joined yet. Transfers are disabled until both participants are present.
+                Counterparty not joined.
               </div>
             )}
-            {allocs.length === 2 && sessionTotalNum > 0 ? (
-              /* ── 2-party slider UI ── */
-              <div className="space-y-4">
-                {/* Participant balance cards */}
-                <div className="grid grid-cols-2 gap-2">
-                  {/* Counterparty */}
-                  <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 space-y-1">
-                    <p className="text-[10px] text-gray-400 uppercase tracking-wide">Counterparty</p>
-                    <p className="font-mono text-[10px] text-gray-500 truncate">
-                      {truncate(allocs[otherAllocIdx]?.participant ?? '', 6)}
-                    </p>
-                    <p className="text-lg font-rubik-medium text-gray-900 leading-none mt-1">
-                      {parseFloat(allocs[otherAllocIdx]?.amount ?? '0').toFixed(4)}
-                    </p>
-                    <p className="text-[10px] text-gray-400">{session.token?.toUpperCase()}</p>
-                  </div>
 
-                  {/* You */}
-                  <div className="bg-gray-900 border border-gray-800 rounded-xl p-3 space-y-1">
-                    <p className="text-[10px] text-gray-400 uppercase tracking-wide">You</p>
-                    <p className="font-mono text-[10px] text-gray-500 truncate">
-                      {truncate(allocs[userAllocIdxSafe]?.participant ?? '', 6)}
-                    </p>
-                    <p className="text-lg font-rubik-medium text-white leading-none mt-1">
-                      {parseFloat(allocs[userAllocIdxSafe]?.amount ?? '0').toFixed(4)}
-                    </p>
-                    <p className="text-[10px] text-gray-400">{session.token?.toUpperCase()}</p>
-                  </div>
-                </div>
-
-                {/* Slider */}
-                <div className="space-y-2">
-                  {/* Visual split bar */}
-                  <div className="relative h-2 rounded-full bg-gray-200 overflow-hidden">
-                    <div
-                      className="absolute inset-y-0 right-0 bg-gray-900 rounded-full transition-all"
-                      style={{ width: `${sliderValue}%` }}
-                    />
-                  </div>
-
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    step={0.01}
-                    value={sliderValue}
-                    onChange={(e) => {
-                      const pct = parseFloat(e.target.value);
-                      const userNew = (pct / 100) * sessionTotalNum;
-                      const otherNew = sessionTotalNum - userNew;
-                      setAllocs((prev) => {
-                        const next = [...prev];
-                        next[userAllocIdxSafe] = {
-                          participant: next[userAllocIdxSafe]?.participant ?? '',
-                          amount: userNew.toFixed(6),
-                        };
-                        next[otherAllocIdx] = {
-                          participant: next[otherAllocIdx]?.participant ?? '',
-                          amount: otherNew.toFixed(6),
-                        };
-                        return next;
-                      });
-                    }}
-                    className="w-full appearance-none bg-transparent cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-gray-900 [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-white [&::-webkit-slider-thumb]:shadow-md [&::-webkit-slider-runnable-track]:h-0 [&::-moz-range-thumb]:h-5 [&::-moz-range-thumb]:w-5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-gray-900 [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-white [&::-moz-range-thumb]:shadow-md [&::-moz-range-thumb]:border-none"
-                  />
-
-                  <div className="flex justify-between text-[10px] text-gray-400">
-                    <span>All to counterparty</span>
-                    <span>All to you</span>
-                  </div>
-                </div>
-
-                {/* Total row */}
-                <div className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2 text-xs">
-                  <span className="text-gray-500">Session total</span>
-                  <span className="font-rubik-medium text-gray-900">
-                    {sessionTotalNum.toFixed(4)} {session.token?.toUpperCase()}
-                  </span>
-                </div>
-
-                <FieldError msg={allocErrors} />
-
-                <Button
-                  onClick={handleOperate}
-                  disabled={operating || !canTransfer}
-                  className="w-full h-9 text-sm bg-gray-900 hover:bg-gray-700 text-white"
-                >
-                  {operating ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    'Confirm Transfer'
-                  )}
-                </Button>
-              </div>
-            ) : (
-              /* ── N-party manual input UI ── */
-              <div className="space-y-3">
-                <p className="text-[11px] text-gray-500">
-                  Redistributes funds between all participants. Total must stay the same.
+            <div className="grid grid-cols-2 gap-2">
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 space-y-1">
+                <p className="text-[10px] text-gray-400 uppercase tracking-wide">Your Balance</p>
+                <p className="text-lg font-rubik-medium text-gray-900 leading-none mt-1">
+                  {myCurrentAlloc.toFixed(4)}
                 </p>
-                <div className="space-y-2">
-                  {allocs.map((a, i) => (
-                    <div key={a.participant} className="bg-gray-50 rounded-lg px-3 py-2 flex items-center gap-2">
-                      <div className="flex-1 min-w-0">
-                        <p className="font-mono text-[10px] text-gray-500 truncate">{truncate(a.participant, 8)}</p>
-                        {a.participant.toLowerCase() === walletAddress?.toLowerCase() && (
-                          <span className="text-[9px] bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded-full">You</span>
-                        )}
-                      </div>
-                      <Input
-                        type="number"
-                        min="0"
-                        step="any"
-                        value={a.amount}
-                        onChange={(e) => {
-                          setAllocs((prev) => {
-                            const next = [...prev];
-                            next[i] = { participant: next[i]?.participant ?? '', amount: e.target.value };
-                            return next;
-                          });
-                        }}
-                        className="h-7 text-xs w-28 bg-white border-gray-300 text-right"
-                      />
-                    </div>
-                  ))}
-                </div>
-                <div className="flex justify-between text-xs px-1">
-                  <span className="text-gray-500">Total</span>
-                  <span className={Math.abs(parseFloat(allocTotal) - parseFloat(sessionTotal)) > 0.000001 ? 'text-red-500 font-medium' : 'text-green-600 font-medium'}>
-                    {allocTotal} / {sessionTotal}
-                  </span>
-                </div>
-
-                <FieldError msg={allocErrors} />
-
-                <Button
-                  onClick={handleOperate}
-                  disabled={operating || !canTransfer}
-                  className="w-full h-8 text-xs bg-gray-900 hover:bg-gray-700 text-white"
-                >
-                  {operating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Confirm Transfer'}
-                </Button>
+                <p className="text-[10px] text-gray-400">{session.token?.toUpperCase()}</p>
               </div>
-            )}
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 space-y-1">
+                <p className="text-[10px] text-gray-400 uppercase tracking-wide">Counterparty Balance</p>
+                <p className="text-lg font-rubik-medium text-gray-900 leading-none mt-1">
+                  {counterpartyAlloc.toFixed(4)}
+                </p>
+                <p className="text-[10px] text-gray-400">{session.token?.toUpperCase()}</p>
+              </div>
+            </div>
+
+            <div>
+              <Label className="text-xs text-gray-700">Amount to send</Label>
+              <Input
+                type="number"
+                min="0"
+                step="any"
+                placeholder="0.00"
+                value={transferAmount}
+                onChange={(e) => setTransferAmount(e.target.value)}
+                className="h-8 text-sm mt-1 bg-white border-gray-300"
+              />
+            </div>
+
+            <Button
+              onClick={handleTransfer}
+              disabled={operating || !transferAmount || Number(transferAmount) <= 0 || !canTransfer}
+              className="w-full h-9 text-sm bg-gray-900 hover:bg-gray-700 text-white"
+            >
+              {operating ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Send to Counterparty'}
+            </Button>
           </TabsContent>
 
           {/* Deposit to session tab */}
@@ -1597,13 +1521,17 @@ function SessionManageView({
                 onChange={(e) => setWithdrawAmount(e.target.value)}
                 className="h-8 text-sm mt-1 bg-white border-gray-300"
               />
-              {withdrawAmount && Number(withdrawAmount) > myCurrentAlloc && (
+              {/* Use epsilon to avoid false positives from float precision. */}
+              {withdrawAmount &&
+                Number(withdrawAmount) > myCurrentAlloc + 1e-9 && (
                 <p className="text-xs text-red-500 mt-1">
                   Cannot exceed your allocation of {myCurrentAlloc.toFixed(4)}
                 </p>
               )}
             </div>
-            {withdrawAmount && Number(withdrawAmount) > 0 && Number(withdrawAmount) <= myCurrentAlloc && (
+            {withdrawAmount &&
+              Number(withdrawAmount) > 0 &&
+              Number(withdrawAmount) <= myCurrentAlloc + 1e-9 && (
               <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex justify-between text-xs">
                 <span className="text-gray-500">Remaining allocation</span>
                 <span className="font-medium text-amber-700">
@@ -1618,7 +1546,7 @@ function SessionManageView({
                 operating ||
                 !withdrawAmount ||
                 Number(withdrawAmount) <= 0 ||
-                Number(withdrawAmount) > myCurrentAlloc
+                Number(withdrawAmount) > myCurrentAlloc + 1e-9
               }
               className="w-full h-8 text-xs bg-black hover:bg-gray-800 text-white"
             >
