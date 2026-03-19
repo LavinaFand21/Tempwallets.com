@@ -3,6 +3,8 @@ import { AppModule } from './app.module.js';
 import { ValidationPipe, LogLevel } from '@nestjs/common';
 import { TraceIdInterceptor } from './common/trace-id.interceptor.js';
 import { GlobalExceptionFilter } from './common/http-exception.filter.js';
+import cookieParser from 'cookie-parser';
+import { DeviceIdMiddleware } from './rateLimiter/device-id.middleware.js';
 
 async function bootstrap() {
   // Configure logger based on environment
@@ -15,6 +17,10 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     logger: logLevels,
   });
+
+  app.use(cookieParser());
+  const deviceMiddleware = new DeviceIdMiddleware();
+  app.use(deviceMiddleware.use.bind(deviceMiddleware));
 
   // Add trace ID interceptor globally
   app.useGlobalInterceptors(new TraceIdInterceptor());

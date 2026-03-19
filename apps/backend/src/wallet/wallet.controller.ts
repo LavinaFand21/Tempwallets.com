@@ -12,10 +12,11 @@ import {
   BadRequestException,
   UnauthorizedException,
   ServiceUnavailableException,
+  Req,
   Res,
   UseGuards,
 } from '@nestjs/common';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { WalletService } from './wallet.service.js';
 import {
   CreateOrImportSeedDto,
@@ -30,6 +31,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { OptionalAuth } from '../auth/decorators/optional-auth.decorator.js';
 import { UserId } from '../auth/decorators/user-id.decorator.js';
 import { PimlicoConfigService } from './config/pimlico.config.js';
+import { RateLimitGuard } from '../rateLimiter/rate-limit.guard.js';
 
 @Controller('wallet')
 @OptionalAuth()
@@ -856,6 +858,20 @@ export class WalletController {
       );
       throw error;
     }
+  }
+
+  @Post('change/authorize')
+  @UseGuards(RateLimitGuard)
+  @HttpCode(HttpStatus.OK)
+  async authorize(@Req() req: any) { 
+    return {
+      success: true,
+      allowed: true,
+      remainingAttempts: req.deviceLimitRemaining || 0,
+      resetsAt: req.deviceLimitResetsAt
+        ? new Date(req.deviceLimitResetsAt).toISOString()
+        : null,
+    };
   }
 
   // /**

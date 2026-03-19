@@ -423,3 +423,13 @@ enum RequestStatus {
   FAILED
   EXPIRED
 }
+
+model RateLimit {
+  deviceId    String    @id
+  count       Int       @default(0)
+  resetAt     DateTime
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("rate_limits")
+}

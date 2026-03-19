@@ -32,6 +32,7 @@
     "@nestjs/jwt": "^10.2.0",
     "@nestjs/passport": "^10.0.3",
     "@nestjs/platform-express": "^11.0.1",
+    "@nestjs/schedule": "^6.1.1",
     "@polkadot/api": "^16.5.2",
     "@polkadot/keyring": "13.5.8",
     "@polkadot/types": "^16.5.2",
@@ -47,6 +48,7 @@
     "canonical-json": "^0.2.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.2",
+    "cookie-parser": "^1.4.7",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
     "passport-jwt": "^4.0.1",
@@ -54,7 +56,8 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "viem": "^2.43.1",
-    "ws": "^8.18.3"
+    "ws": "^8.18.3",
+    "zkarb-sdk": "1.0.5"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
