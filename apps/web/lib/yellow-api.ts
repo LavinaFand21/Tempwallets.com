@@ -194,7 +194,8 @@ export interface AppSession {
   /** Lowercase token identifier, e.g. "usdc" */
   token: string;
   status: 'open' | 'closed' | string;
-  participants: Array<{ address: string; joined: boolean }>;
+  totalBalance?: number;
+  participants: Array<{ address: string; joined: boolean; balance?: number }>;
   allocations?: SessionAllocation[];
   version?: number;
   createdAt?: string;
@@ -256,6 +257,7 @@ export interface PatchSessionRequest {
 export interface PatchSessionResponse {
   ok: boolean;
   message?: string;
+  session?: AppSession;
 }
 
 export interface CloseSessionResponse {

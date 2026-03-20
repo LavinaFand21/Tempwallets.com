@@ -640,8 +640,42 @@ export function useAppSessions(
             WITHDRAW: 'Funds withdrawn from session.',
           };
           toast.success(labels[intent]);
-          // Refresh session detail
-          await loadSessionDetail(sessionId);
+          if (res.session) {
+            const def = (res.session as any).definition;
+            const normalized: AppSession = {
+              ...res.session,
+              chain: res.session.chain || chain,
+              token:
+                res.session.token ||
+                res.session.allocations?.[0]?.asset ||
+                'usdc',
+              participants: normalizeParticipants(
+                res.session.participants as any,
+                res.session.allocations,
+                def?.participants,
+              ),
+            };
+
+            // Replace session state entirely with server response (no merge)
+            setSelectedSessionDetail((prev) => ({
+              ...prev,
+              session: normalized,
+              loading: false,
+            }));
+
+            setSessions((prev) =>
+              prev.map((s) => (s.appSessionId === normalized.appSessionId ? normalized : s)),
+            );
+          } else {
+            // Fallback: refresh session detail
+            await loadSessionDetail(sessionId);
+          }
+
+          // Short-term poll to sync across browsers after transfers
+          if (intent === 'OPERATE') {
+            setTimeout(() => loadSessionDetail(sessionId), 2_000);
+          }
+
           onBalanceChange?.();
           return true;
         }

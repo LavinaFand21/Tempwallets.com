@@ -27,7 +27,8 @@ export class CreateAppSessionResultDto {
   appSessionId!: string;
   status!: 'open' | 'closed';
   version!: number;
-  participants!: Array<{ address: string; joined: boolean }>;
+  totalBalance?: number;
+  participants!: Array<{ address: string; joined: boolean; balance?: number }>;
   allocations!: Array<{
     participant: string;
     asset: string;

@@ -35,4 +35,27 @@ export class UpdateAllocationResultDto {
     asset: string;
     amount: string;
   }>;
+  session?: {
+    appSessionId: string;
+    status: 'open' | 'closed' | string;
+    version: number;
+    chain: string;
+    token: string;
+    totalBalance?: number;
+    participants: Array<{ address: string; joined: boolean; balance?: number }>;
+    allocations: Array<{
+      participant: string;
+      asset: string;
+      amount: string;
+    }>;
+    definition?: {
+      protocol: string;
+      participants: string[];
+      weights: number[];
+      quorum: number;
+      challenge: number;
+      nonce: number;
+    };
+    sessionData?: any;
+  };
 }

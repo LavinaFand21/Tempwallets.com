@@ -19,7 +19,8 @@ export class QuerySessionResultDto {
   version!: number;
   chain!: string;
   token!: string;
-  participants!: Array<{ address: string; joined: boolean }>;
+  totalBalance?: number;
+  participants!: Array<{ address: string; joined: boolean; balance?: number }>;
   definition!: {
     protocol: string;
     participants: string[];

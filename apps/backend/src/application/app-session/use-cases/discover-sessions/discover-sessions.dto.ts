@@ -20,7 +20,8 @@ export class DiscoverSessionsResultDto {
     version: number;
     chain: string;
     token: string;
-    participants: Array<{ address: string; joined: boolean }>;
+    totalBalance?: number;
+    participants: Array<{ address: string; joined: boolean; balance?: number }>;
     allocations: Array<{
       participant: string;
       asset: string;

@@ -11,12 +11,11 @@
  * 2. Query current session state from Yellow Network
  * 3. Validate user is a participant
  * 4. Update allocations via Yellow Network (signed state transition)
- * 5. Return updated state (NO database update - Yellow Network is source of truth)
+ * 5. Persist canonical balances to DB (single source of truth)
  *
  * Simplified from current implementation:
- * - No database sync (overcomplicated)
  * - Single operation for deposit/transfer/withdraw (cleaner)
- * - Yellow Network handles all validation
+ * - Canonical session state stored in DB for consistency
  */
 
 import { Injectable, Inject, BadRequestException } from '@nestjs/common';
@@ -25,6 +24,7 @@ import { YELLOW_NETWORK_PORT } from '../../ports/yellow-network.port.js';
 import type { IWalletProviderPort } from '../../ports/wallet-provider.port.js';
 import { WALLET_PROVIDER_PORT } from '../../ports/wallet-provider.port.js';
 import { PrismaService } from '../../../../database/prisma.service.js';
+import { mergeSessionState } from '../../utils/canonical-session.js';
 import {
   UpdateAllocationDto,
   UpdateAllocationResultDto,
@@ -55,31 +55,49 @@ export class UpdateAllocationUseCase {
       dto.appSessionId,
     );
 
+    const existingNode = await this.prisma.lightningNode.findUnique({
+      where: { appSessionId: dto.appSessionId },
+      include: { participants: true },
+    });
+    const walletLower = walletAddress.toLowerCase();
+
+    // Guard: prevent negative balances in requested allocations
+    if (dto.allocations?.some((a) => Number(a.amount) < 0 || Number.isNaN(Number(a.amount)))) {
+      throw new BadRequestException('Negative balances are not allowed');
+    }
+
     // Guard: require two participants before transfers (OPERATE)
     if (dto.intent === 'OPERATE') {
       const participantCount =
-        currentSession.definition?.participants?.length ?? 0;
+        existingNode?.participants.length ??
+        currentSession.definition?.participants?.length ??
+        0;
       if (participantCount < 2) {
         throw new BadRequestException('Session must have at least 2 participants');
       }
 
-      // Check if all participants have joined by verifying they have allocations
-      // In Yellow Network, a participant has "joined" if they have an allocation entry
-      const participants = currentSession.definition?.participants ?? [];
-      const allocations = currentSession.allocations ?? [];
-      
-      const joinedCount = participants.filter((participantAddr) =>
-        allocations.some(
-          (alloc) =>
-            alloc.participant.toLowerCase() === participantAddr.toLowerCase(),
-        ),
-      ).length;
+      const joinedCount =
+        existingNode?.participants.filter(
+          (p) => p.status === 'joined' || p.address.toLowerCase() === walletLower,
+        ).length ?? 0;
 
       if (joinedCount < 2) {
         throw new BadRequestException(
           'Counterparty has not joined yet. Transfers require all participants to have joined the session.',
         );
       }
+    }
+
+    if (dto.intent === 'OPERATE') {
+      console.log('[UpdateAllocation] Before transfer balances', {
+        sessionId: dto.appSessionId,
+        balances: (existingNode?.participants ?? []).map((p) => ({
+          address: p.address,
+          asset: p.asset,
+          balance: p.balance,
+          status: p.status,
+        })),
+      });
     }
 
     // 4. Update allocations with Yellow Network
@@ -90,94 +108,163 @@ export class UpdateAllocationUseCase {
     });
 
     // 5. Persist latest balances in local DB for deterministic totals
-    const node = await this.prisma.lightningNode.findUnique({
+    const tokenFromUpdated =
+      (updated.allocations ?? currentSession.allocations ?? []).find((a: any) => a.asset)?.asset ??
+      existingNode?.token ??
+      'usdc';
+    const token = tokenFromUpdated.toLowerCase();
+
+    const participantList =
+      updated.definition?.participants?.length
+        ? updated.definition.participants
+        : currentSession.definition?.participants?.length
+          ? currentSession.definition.participants
+          : existingNode?.participants.map((p) => p.address) ?? [];
+
+    // Yellow can return partial allocations for OPERATE. Build a canonical map
+    // by layering: current session -> requested allocations -> confirmed update.
+    // This preserves zero-sum target amounts even when Yellow omits one side.
+    const allocationByKey = new Map(
+      (currentSession.allocations ?? []).map((a: any) => [
+        `${String(a.participant).toLowerCase()}|${String(a.asset ?? token).toLowerCase()}`,
+        a.amount ?? '0',
+      ]),
+    );
+    for (const alloc of dto.allocations ?? []) {
+      allocationByKey.set(
+        `${String(alloc.participant).toLowerCase()}|${String(alloc.asset ?? token).toLowerCase()}`,
+        alloc.amount ?? '0',
+      );
+    }
+    for (const alloc of updated.allocations ?? []) {
+      allocationByKey.set(
+        `${String(alloc.participant).toLowerCase()}|${String(alloc.asset ?? token).toLowerCase()}`,
+        alloc.amount ?? '0',
+      );
+    }
+
+    const now = new Date();
+
+    await this.prisma.$transaction(async (tx) => {
+      const node = await tx.lightningNode.upsert({
+        where: { appSessionId: dto.appSessionId },
+        update: {
+          status: updated.status,
+          token,
+          chain: dto.chain,
+          updatedAt: now,
+        },
+        create: {
+          userId: dto.userId,
+          appSessionId: dto.appSessionId,
+          uri: `lightning://${dto.appSessionId}`,
+          chain: dto.chain,
+          token,
+          status: updated.status,
+          maxParticipants: participantList.length || 2,
+          quorum: updated.definition?.quorum ?? currentSession.definition?.quorum ?? 100,
+          protocol: updated.definition?.protocol ?? currentSession.definition?.protocol ?? 'NitroRPC/0.4',
+          challenge: updated.definition?.challenge ?? currentSession.definition?.challenge ?? 3600,
+          sessionData:
+            typeof updated.session_data === 'string'
+              ? updated.session_data
+              : JSON.stringify(updated.session_data ?? {}),
+        },
+      });
+
+      for (const address of participantList) {
+        const addrLower = address.toLowerCase();
+        const key = `${addrLower}|${token}`;
+        const existing = existingNode?.participants.find(
+          (p) =>
+            p.address.toLowerCase() === addrLower &&
+            p.asset.toLowerCase() === token,
+        );
+        const currentStatus = existing?.status ?? 'invited';
+        const shouldJoin = addrLower === walletLower || currentStatus === 'joined';
+        const nextBalance = allocationByKey.get(key) ?? existing?.balance ?? '0';
+
+        await tx.lightningNodeParticipant.upsert({
+          where: {
+            lightningNodeId_address_asset: {
+              lightningNodeId: node.id,
+              address,
+              asset: token,
+            },
+          },
+          update: {
+            balance: nextBalance,
+            status: shouldJoin ? 'joined' : currentStatus,
+            joinedAt: shouldJoin ? now : undefined,
+            lastSeenAt: addrLower === walletLower ? now : undefined,
+          },
+          create: {
+            lightningNodeId: node.id,
+            address,
+            weight: updated.definition?.weights?.[participantList.indexOf(address)] ?? 0,
+            balance: nextBalance,
+            asset: token,
+            status: shouldJoin ? 'joined' : 'invited',
+            joinedAt: shouldJoin ? now : null,
+            lastSeenAt: addrLower === walletLower ? now : null,
+          },
+        });
+      }
+    });
+
+    const syncedNode = await this.prisma.lightningNode.findUnique({
       where: { appSessionId: dto.appSessionId },
       include: { participants: true },
     });
 
-    if (node) {
-      const participantList =
-        updated.definition?.participants?.length
-          ? updated.definition.participants
-          : currentSession.definition?.participants?.length
-            ? currentSession.definition.participants
-            : node.participants.map((p) => p.address);
+    const canonical = mergeSessionState({
+      yellow: updated,
+      dbParticipants: (syncedNode?.participants ?? []).map((p) => ({
+        address: p.address,
+        status: p.status,
+        balance: p.balance,
+        asset: p.asset,
+      })),
+      dbToken: syncedNode?.token ?? token,
+    });
 
-      // IMPORTANT:
-      // YellowNetworkAdapter.updateSession expects/caches COMPLETE per-participant
-      // allocations. The client payload may be partial (e.g. DEPOSIT/WITHDRAW),
-      // so persisting from dto.allocations can incorrectly zero out other
-      // participants' balances and cause inconsistent session totals.
-      const allocs = updated.allocations ?? dto.allocations ?? [];
-      const assets = [
-        ...new Set(
-          (allocs.length > 0 ? allocs : []).map((a) =>
-            a.asset?.toLowerCase?.() ?? a.asset,
-          ),
-        ),
-      ];
-      const completeAllocations: Array<{
-        participant: string;
-        asset: string;
-        amount: string;
-      }> = [];
-
-      for (const asset of assets) {
-        for (const address of participantList) {
-          const existing = allocs.find(
-            (a) =>
-              a.participant.toLowerCase() === address.toLowerCase() &&
-              (a.asset?.toLowerCase?.() ?? a.asset) === asset,
-          );
-          completeAllocations.push({
-            participant: address,
-            asset,
-            amount: existing?.amount ?? '0',
-          });
-        }
-      }
-
-      const statusByAddress = new Map(
-        node.participants.map((p) => [p.address.toLowerCase(), p.status]),
-      );
-
-      for (const alloc of completeAllocations) {
-        const existing = node.participants.find(
-          (p) =>
-            p.address.toLowerCase() === alloc.participant.toLowerCase() &&
-            p.asset.toLowerCase() === alloc.asset.toLowerCase(),
-        );
-        if (existing) {
-          await this.prisma.lightningNodeParticipant.update({
-            where: { id: existing.id },
-            data: {
-              balance: alloc.amount,
-              asset: alloc.asset,
-              lastSeenAt: new Date(),
-            },
-          });
-        } else {
-          await this.prisma.lightningNodeParticipant.create({
-            data: {
-              lightningNodeId: node.id,
-              address: alloc.participant,
-              asset: alloc.asset,
-              balance: alloc.amount,
-              weight: 0,
-              status:
-                statusByAddress.get(alloc.participant.toLowerCase()) ?? 'invited',
-              lastSeenAt: new Date(),
-            },
-          });
-        }
-      }
+    if (dto.intent === 'OPERATE') {
+      console.log('[UpdateAllocation] After transfer balances', {
+        sessionId: dto.appSessionId,
+        balances: canonical.participants.map((p) => ({
+          address: p.address,
+          balance: p.balance,
+        })),
+      });
+      console.log('[UpdateAllocation] Canonical session state', {
+        sessionId: dto.appSessionId,
+        totalBalance: canonical.totalBalance,
+        participants: canonical.participants,
+      });
     }
 
     // 6. Return result
     return {
       appSessionId: updated.app_session_id,
       version: updated.version,
-      allocations: updated.allocations,
+      allocations: canonical.allocations,
+      session: {
+        appSessionId: updated.app_session_id,
+        status: updated.status,
+        version: updated.version,
+        chain: dto.chain,
+        token: canonical.token,
+        totalBalance: canonical.totalBalance,
+        participants: canonical.participants.map((p) => ({
+          address: p.address,
+          joined: p.joined,
+          balance: p.balance,
+        })),
+        allocations: canonical.allocations,
+        definition: updated.definition,
+        sessionData: updated.session_data,
+      },
     };
   }
 }
+

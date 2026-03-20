@@ -11,11 +11,12 @@
  * 3. Build initial allocations
  * 4. Create domain entity (validates business rules)
  * 5. Register with Yellow Network
- * 6. Return result (NO database storage - Yellow Network is source of truth)
+ * 6. Persist canonical session state to database
+ * 7. Return canonical session result (single source of truth)
  *
  * Simplified from current implementation:
- * - Removed database persistence (overcomplicated in comparison guide)
- * - Removed participant status tracking (doesn't exist in Yellow Network)
+ * - Canonical session state stored in DB for multi-user consistency
+ * - Participant status tracked in DB (invited/joined)
  * - Removed EOA/ERC-4337 complexity (Yellow Network doesn't care)
  * - No URI generation (just use app_session_id directly)
  */
@@ -30,6 +31,8 @@ import { CHANNEL_MANAGER_PORT } from '../../../channel/ports/channel-manager.por
 import { AppSession } from '../../../../domain/app-session/entities/app-session.entity.js';
 import { SessionDefinition } from '../../../../domain/app-session/value-objects/session-definition.vo.js';
 import { Allocation } from '../../../../domain/app-session/value-objects/allocation.vo.js';
+import { PrismaService } from '../../../../database/prisma.service.js';
+import { mergeSessionState } from '../../utils/canonical-session.js';
 import {
   CreateAppSessionDto,
   CreateAppSessionResultDto,
@@ -44,6 +47,7 @@ export class CreateAppSessionUseCase {
     private readonly walletProvider: IWalletProviderPort,
     @Inject(CHANNEL_MANAGER_PORT)
     private readonly channelManager: IChannelManagerPort,
+    private readonly prisma: PrismaService,
   ) {}
 
   async execute(dto: CreateAppSessionDto): Promise<CreateAppSessionResultDto> {
@@ -122,24 +126,118 @@ export class CreateAppSessionUseCase {
         });
 
         const definitionParticipants = definition.participants;
-        const normalizedAllocationParticipants = new Set(
-          (yellowResponse.allocations || []).map((alloc) =>
+        const appSessionId = yellowResponse.app_session_id;
+        const now = new Date();
+        const token = dto.token.toLowerCase();
+        const allocationByAddress = new Map<string, string>(
+          (yellowResponse.allocations || []).map((alloc) => [
             alloc.participant.toLowerCase(),
-          ),
+            alloc.amount ?? '0',
+          ]),
         );
 
+        const participantSnapshots = definitionParticipants.map((address, idx) => {
+          const status =
+            address.toLowerCase() === creatorAddress.toLowerCase()
+              ? 'joined'
+              : 'invited';
+          return {
+            address,
+            status,
+            balance: allocationByAddress.get(address.toLowerCase()) ?? '0',
+            asset: token,
+            weight: weights[idx] ?? 0,
+          };
+        });
+
+        await this.prisma.$transaction(async (tx) => {
+          const node = await tx.lightningNode.upsert({
+            where: { appSessionId },
+            update: {
+              chain: dto.chain,
+              token,
+              status: yellowResponse.status,
+              quorum,
+              protocol: definition.protocol,
+              challenge: definition.challenge,
+              sessionData:
+                typeof dto.sessionData === 'string'
+                  ? dto.sessionData
+                  : JSON.stringify(dto.sessionData ?? {}),
+              updatedAt: now,
+            },
+            create: {
+              userId: dto.userId,
+              appSessionId,
+              uri: `lightning://${appSessionId}`,
+              chain: dto.chain,
+              token,
+              status: yellowResponse.status,
+              maxParticipants: definitionParticipants.length,
+              quorum,
+              protocol: definition.protocol,
+              challenge: definition.challenge,
+              sessionData:
+                typeof dto.sessionData === 'string'
+                  ? dto.sessionData
+                  : JSON.stringify(dto.sessionData ?? {}),
+            },
+          });
+
+          for (const p of participantSnapshots) {
+            const isJoined = p.status === 'joined';
+            await tx.lightningNodeParticipant.upsert({
+              where: {
+                lightningNodeId_address_asset: {
+                  lightningNodeId: node.id,
+                  address: p.address,
+                  asset: p.asset,
+                },
+              },
+              update: {
+                weight: p.weight,
+                balance: p.balance,
+                asset: p.asset,
+                status: p.status,
+                joinedAt: isJoined ? now : undefined,
+                lastSeenAt: isJoined ? now : undefined,
+              },
+              create: {
+                lightningNodeId: node.id,
+                address: p.address,
+                weight: p.weight,
+                balance: p.balance,
+                asset: p.asset,
+                status: p.status,
+                joinedAt: isJoined ? now : null,
+                lastSeenAt: isJoined ? now : null,
+              },
+            });
+          }
+        });
+
+        const canonical = mergeSessionState({
+          yellow: yellowResponse,
+          dbParticipants: participantSnapshots.map((p) => ({
+            address: p.address,
+            status: p.status,
+            balance: p.balance,
+            asset: p.asset,
+          })),
+          dbToken: token,
+        });
+
         return {
-          appSessionId: yellowResponse.app_session_id,
+          appSessionId,
           status: yellowResponse.status,
           version: yellowResponse.version,
-          participants: definitionParticipants.map((address: string) => ({
-            address,
-            joined:
-              normalizedAllocationParticipants.size === 0
-                ? true
-                : normalizedAllocationParticipants.has(address.toLowerCase()),
+          totalBalance: canonical.totalBalance,
+          participants: canonical.participants.map((p) => ({
+            address: p.address,
+            joined: p.joined,
+            balance: p.balance,
           })),
-          allocations: yellowResponse.allocations,
+          allocations: canonical.allocations,
         };
       } catch (error) {
         lastError = error;
@@ -158,8 +256,17 @@ export class CreateAppSessionUseCase {
 
         if (isChannelLag) {
           throw new BadRequestException(
-            'Cannot create app session: an active payment channel still has locked funds. ' +
-              'Please wait a moment and try again.',
+            'Cannot create app session: Your funds are currently locked in an active payment channel. ' +
+              '\n\n📍 Yellow Network Architecture:' +
+              '\n  • Payment Channels pull from: Custody Contract (on-chain)' +
+              '\n  • App Sessions pull from: Unified Balance (off-chain)' +
+              '\n\n✅ Solution:' +
+              '\n  1. Close your active payment channel(s) first' +
+              '\n  2. Funds will return to custody "available balance"' +
+              '\n  3. This makes them available in your "unified balance"' +
+              '\n  4. Then create the app session' +
+              '\n\n💡 Fund Flow: Payment Channel → Custody (available) → Unified Balance → App Session' +
+              '\n\nOriginal error: ' + errorMsg,
           );
         }
 

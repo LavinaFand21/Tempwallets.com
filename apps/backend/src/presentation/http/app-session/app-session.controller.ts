@@ -118,6 +118,7 @@ export class AppSessionController {
       appSessionId: result.appSessionId,
       status: result.status,
       version: result.version,
+      totalBalance: result.totalBalance,
       participants: result.participants,
       allocations: result.allocations,
     };
@@ -238,6 +239,7 @@ export class AppSessionController {
       appSessionId: result.appSessionId,
       version: result.version,
       allocations: result.allocations,
+      session: result.session,
     };
   }
 
