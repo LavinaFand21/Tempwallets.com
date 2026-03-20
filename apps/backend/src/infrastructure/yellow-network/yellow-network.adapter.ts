@@ -54,6 +54,8 @@ export class YellowNetworkAdapter
   private wsUrl: string;
   private currentClient: NitroliteClient | null = null;
   private currentWallet: string | null = null;
+  /** Serialises concurrent authenticate() calls to prevent WebSocket storms */
+  private authInFlight: Promise<{ sessionId: string; expiresAt: number; authSignature: string }> | null = null;
 
   /**
    * Tracks per-participant allocations for each app session.
@@ -83,9 +85,46 @@ export class YellowNetworkAdapter
 
   /**
    * Authenticate wallet with Yellow Network
-   * Creates NitroliteClient and establishes connection
+   * Creates NitroliteClient and establishes connection.
+   *
+   * Serialised via authInFlight so concurrent callers (e.g. getSession +
+   * getSessionBalances firing in parallel) queue up instead of each calling
+   * disconnect() on each other and spawning multiple WebSocket connections.
    */
   async authenticate(
+    userId: string,
+    walletAddress: string,
+  ): Promise<{
+    sessionId: string;
+    expiresAt: number;
+    authSignature: string;
+  }> {
+    // Fast path: already authenticated — skip the lock entirely.
+    if (this.currentClient && this.currentWallet === walletAddress) {
+      if (
+        this.currentClient.isInitialized() &&
+        this.currentClient.isAuthenticated()
+      ) {
+        const sessionId = `${userId}:${walletAddress.toLowerCase()}`;
+        const expiresAt = Date.now() + 24 * 60 * 60 * 1000;
+        const authSignature = this.currentClient.getAuthSignature() || '';
+        return { sessionId, expiresAt, authSignature };
+      }
+    }
+
+    // Slow path: need to (re-)authenticate — serialise concurrent callers.
+    if (this.authInFlight) {
+      return this.authInFlight;
+    }
+
+    this.authInFlight = this._doAuthenticate(userId, walletAddress).finally(() => {
+      this.authInFlight = null;
+    });
+
+    return this.authInFlight;
+  }
+
+  private async _doAuthenticate(
     userId: string,
     walletAddress: string,
   ): Promise<{
@@ -99,12 +138,8 @@ export class YellowNetworkAdapter
     // Session expires in 24 hours
     const expiresAt = Date.now() + 24 * 60 * 60 * 1000;
 
-    // If already authenticated for this wallet, reuse client only when the
-    // session is still valid on both the local and server side.
-    // isAuthenticated() checks the local expiry; after a WebSocket reconnect the
-    // server invalidates the session even if the local expiry hasn't passed, so
-    // postReconnectSync() clears the local session — making isAuthenticated() false
-    // and forcing a fresh auth here.
+    // Re-check after acquiring the "lock" — a concurrent caller may have
+    // already completed authentication while we were waiting.
     if (this.currentClient && this.currentWallet === walletAddress) {
       if (
         this.currentClient.isInitialized() &&

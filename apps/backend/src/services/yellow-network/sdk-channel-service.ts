@@ -1044,7 +1044,13 @@ export class SDKChannelService {
     );
     console.log(`[SDKChannelService] ✅ Channel close tx=${txHash}`);
 
-    await this.publicClient.waitForTransactionReceipt({ hash: txHash });
+    const closeReceipt = await this.publicClient.waitForTransactionReceipt({ hash: txHash });
+    if (closeReceipt.status === 'reverted') {
+      throw new Error(
+        `Channel close transaction reverted on-chain (tx=${txHash}). ` +
+        `Funds remain in the channel. Check that the channel state is consistent and retry.`,
+      );
+    }
     console.log(`[SDKChannelService] ✅ Channel closed channel=${channelId}`);
 
     return {

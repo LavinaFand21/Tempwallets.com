@@ -26,7 +26,6 @@ import {
   DiscoverSessionsDto,
   DiscoverSessionsResultDto,
 } from './discover-sessions.dto.js';
-import { PrismaService } from '../../../../database/prisma.service.js';
 
 @Injectable()
 export class DiscoverSessionsUseCase {
@@ -35,7 +34,6 @@ export class DiscoverSessionsUseCase {
     private readonly yellowNetwork: IYellowNetworkPort,
     @Inject(WALLET_PROVIDER_PORT)
     private readonly walletProvider: IWalletProviderPort,
-    private readonly prisma: PrismaService,
   ) {}
 
   async execute(dto: DiscoverSessionsDto): Promise<DiscoverSessionsResultDto> {
@@ -49,105 +47,61 @@ export class DiscoverSessionsUseCase {
     await this.yellowNetwork.authenticate(dto.userId, walletAddress);
 
     // 3. Query sessions from Yellow Network
-    // Yellow Network filters by participant for us
+    // Yellow Network already filters by participant so every returned session
+    // belongs to this user — no secondary DB filter needed.
     const sessions = await this.yellowNetwork.querySessions({
       participant: walletAddress,
       status: dto.status,
     });
 
-    // 4. Return enriched result — include chain from the request and
-    //    derive token from allocations so the frontend can display them.
-    const appSessionIds = sessions.map((s) => s.app_session_id);
-    const localNodes = await this.prisma.lightningNode.findMany({
-      where: { appSessionId: { in: appSessionIds } },
-      include: { participants: true },
-    });
-    const statusBySession = new Map(
-      localNodes.map((n) => [
-        n.appSessionId,
-        new Map(
-          (n.participants || []).map((p) => [
-            p.address.toLowerCase(),
-            p.status,
-          ]),
-        ),
-      ]),
-    );
-
-    const joinedSessions = sessions.filter((s) => {
-      const statuses = statusBySession.get(s.app_session_id);
-      return statuses?.get(walletAddress.toLowerCase()) === 'joined';
-    });
-
-    // Fetch full session details for joined sessions.
-    // get_app_sessions often returns partial allocations (per-requester),
-    // which causes totals to differ across clients.
+    // 4. Fetch full details for each session so allocations and participants
+    //    are complete (the list endpoint returns partial data).
     const detailResults = await Promise.allSettled(
-      joinedSessions.map((s) => this.yellowNetwork.querySession(s.app_session_id)),
+      sessions.map((s) => this.yellowNetwork.querySession(s.app_session_id)),
     );
     const detailById = new Map<string, (typeof sessions)[number]>();
     detailResults.forEach((r, idx) => {
       if (r.status !== 'fulfilled') return;
-      detailById.set(joinedSessions[idx]!.app_session_id, r.value as any);
+      detailById.set(sessions[idx]!.app_session_id, r.value as any);
     });
 
-    const nodeById = new Map(localNodes.map((n) => [n.appSessionId, n]));
-
     return {
-      sessions: joinedSessions.map((s) => {
+      sessions: sessions.map((s) => {
         const detail = detailById.get(s.app_session_id) ?? s;
-        const allocations = detail.allocations ?? [];
-        const node = nodeById.get(s.app_session_id);
-        const dbToken = (node?.token ?? '').toLowerCase();
-        const dbAllocs =
-          node?.participants?.length
-            ? node.participants.map((p) => ({
-                participant: p.address,
-                asset: (p.asset || dbToken || 'usdc').toLowerCase(),
-                amount: p.balance ?? '0',
-              }))
-            : [];
-        const mergedAllocs = allocations.length > 0 ? allocations : dbAllocs;
-        // Token is the first non-empty asset from allocations
-        const token = mergedAllocs.find((a) => a.asset)?.asset ?? dbToken ?? 'usdc';
-        const participantStatuses = statusBySession.get(s.app_session_id);
-        const participantList =
-          detail.definition?.participants?.length
-            ? detail.definition.participants
+        const allocations = (detail as any).allocations ?? s.allocations ?? [];
+
+        // Derive token from allocations, fall back to 'usdc'
+        const token = (allocations as any[]).find((a: any) => a.asset)?.asset ?? 'usdc';
+
+        // Build participant list from definition (most complete source)
+        const participantList: string[] =
+          (detail as any).definition?.participants?.length
+            ? (detail as any).definition.participants
             : s.definition?.participants?.length
               ? s.definition.participants
-              : Array.from(participantStatuses?.keys() ?? []);
+              : (allocations as any[]).map((a: any) => a.participant).filter(Boolean);
 
-        // Ensure allocations include every participant (0 for missing entries)
+        // Ensure every participant has an allocation entry (0 for missing)
         const assets = [
           ...new Set(
-            (mergedAllocs.length > 0 ? mergedAllocs : token ? [{ asset: token }] : []).map(
-              (a: any) => a.asset?.toLowerCase?.() ?? a.asset,
-            ),
+            (allocations as any[]).map((a: any) => (a.asset ?? '').toLowerCase()).filter(Boolean),
           ),
         ];
-        const dbAllocMap = new Map(
-          dbAllocs.map((a) => [
-            `${a.participant.toLowerCase()}|${a.asset.toLowerCase()}`,
-            a.amount,
-          ]),
-        );
-        const completeAllocations: typeof mergedAllocs = [];
-        for (const asset of assets) {
-          for (const address of participantList ?? []) {
-            const existing = mergedAllocs.find(
-              (a) =>
-                a.participant.toLowerCase() === address.toLowerCase() &&
-                a.asset.toLowerCase() === asset,
-            );
-            completeAllocations.push({
-              participant: address,
-              asset,
-              amount:
-                existing?.amount ??
-                dbAllocMap.get(`${address.toLowerCase()}|${asset.toLowerCase()}`) ??
-                '0',
-            });
+        const completeAllocations: Array<{ participant: string; asset: string; amount: string }> = [];
+        if (assets.length > 0 && participantList.length > 0) {
+          for (const asset of assets) {
+            for (const address of participantList) {
+              const existing = (allocations as any[]).find(
+                (a: any) =>
+                  a.participant?.toLowerCase() === address.toLowerCase() &&
+                  (a.asset ?? '').toLowerCase() === asset,
+              );
+              completeAllocations.push({
+                participant: address,
+                asset,
+                amount: existing?.amount ?? '0',
+              });
+            }
           }
         }
 
@@ -157,14 +111,16 @@ export class DiscoverSessionsUseCase {
           version: s.version,
           chain: dto.chain,
           token,
-          participants: (participantList ?? []).map((address) => ({
+          // Mark the requesting wallet as joined=true; Yellow Network is the
+          // source of truth and returning the session means the user is active.
+          participants: participantList.map((address) => ({
             address,
-            joined: participantStatuses?.get(address.toLowerCase()) === 'joined',
+            joined: address.toLowerCase() === walletAddress.toLowerCase(),
           })),
-          allocations: completeAllocations.length > 0 ? completeAllocations : mergedAllocs,
+          allocations: completeAllocations.length > 0 ? completeAllocations : allocations,
         };
       }),
-      count: joinedSessions.length,
+      count: sessions.length,
     };
   }
 }

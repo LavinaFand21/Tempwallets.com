@@ -28,7 +28,6 @@ import { WALLET_PROVIDER_PORT } from '../../ports/wallet-provider.port.js';
 import { AppSession } from '../../../../domain/app-session/entities/app-session.entity.js';
 import { SessionDefinition } from '../../../../domain/app-session/value-objects/session-definition.vo.js';
 import { Allocation } from '../../../../domain/app-session/value-objects/allocation.vo.js';
-import { PrismaService } from '../../../../database/prisma.service.js';
 import {
   CreateAppSessionDto,
   CreateAppSessionResultDto,
@@ -41,7 +40,6 @@ export class CreateAppSessionUseCase {
     private readonly yellowNetwork: IYellowNetworkPort,
     @Inject(WALLET_PROVIDER_PORT)
     private readonly walletProvider: IWalletProviderPort,
-    private readonly prisma: PrismaService,
   ) {}
 
   async execute(dto: CreateAppSessionDto): Promise<CreateAppSessionResultDto> {
@@ -100,11 +98,29 @@ export class CreateAppSessionUseCase {
       });
 
       // 10. Return result (NO database storage)
+      // Yellow Network returns `participants: null` in the create response so we
+      // fall back to the definition participants we sent (always available locally).
+      const definitionParticipants = definition.participants;
+      const normalizedAllocationParticipants = new Set(
+        (yellowResponse.allocations || []).map((alloc) =>
+          alloc.participant.toLowerCase(),
+        ),
+      );
+
       return {
         appSessionId: yellowResponse.app_session_id,
         status: yellowResponse.status,
         version: yellowResponse.version,
-        participants: yellowResponse.definition.participants,
+        participants: definitionParticipants.map((address: string) => ({
+          address,
+          // Derive joined from allocation presence.
+          // Creator always has an allocation entry (even if 0), so mark joined=true
+          // when the allocations list is empty (no allocations means no filter).
+          joined:
+            normalizedAllocationParticipants.size === 0
+              ? true
+              : normalizedAllocationParticipants.has(address.toLowerCase()),
+        })),
         allocations: yellowResponse.allocations,
       };
     } catch (error) {

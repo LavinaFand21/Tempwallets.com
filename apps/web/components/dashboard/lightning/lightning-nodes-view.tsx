@@ -241,10 +241,10 @@ function LightningBalancesCard({
           </div>
 
           {/* Custody available (on-chain contract) */}
-          <div className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2">
+          <div className="flex items-center justify-between bg-green-50 border border-green-100 rounded-lg px-3 py-2">
             <div>
-              <p className="text-xs text-gray-500">Custody Available</p>
-              <p className="text-[10px] text-gray-400">On-chain custody contract</p>
+              <p className="text-xs text-gray-700 font-rubik-medium">Custody Available</p>
+              <p className="text-[10px] text-gray-400">On-chain · withdraw-ready</p>
             </div>
             <p className="text-sm font-rubik-medium text-gray-900">
               {custodyAvailable != null
@@ -287,8 +287,8 @@ function LightningBalancesCard({
           <div className="flex items-start gap-1.5 px-3 pt-1">
             <Info className="h-3 w-3 text-gray-300 mt-0.5 shrink-0" />
             <p className="text-[9px] text-gray-400 leading-tight">
-              Flow: Deposit → funds locked in channel. Close channel → funds return to custody.
-              Withdraw → funds sent to your wallet.
+              <strong className="text-gray-500">Flow:</strong> Wallet → Deposit → Custody Available → Fund Channel → Unified Balance → Close Channel → Custody Available → Withdraw → Wallet.
+              {' '}After closing a channel, <strong className="text-gray-500">Custody Available</strong> updates immediately; Unified Balance may take 10–15 s to reflect the settlement.
             </p>
           </div>
         </div>
@@ -1085,8 +1085,6 @@ function SessionManageView({
   session,
   balances,
   walletAddress,
-  userId,
-  chain,
   operating,
   onPatch,
   onClose,
@@ -1094,26 +1092,20 @@ function SessionManageView({
   session: AppSession;
   balances: { asset: string; amount: string }[];
   walletAddress: string | null;
-  userId: string;
-  chain: string;
   operating: boolean;
   onPatch: (intent: 'OPERATE' | 'DEPOSIT' | 'WITHDRAW', allocs: SessionAllocation[]) => Promise<boolean>;
   onClose: () => Promise<boolean>;
 }) {
   const [tab, setTab] = useState<ManageTab>('info');
-  const [transferAmount, setTransferAmount] = useState('');
   const [depositAmount, setDepositAmount] = useState('');
   const [withdrawAmount, setWithdrawAmount] = useState('');
+  const [allocErrors, setAllocErrors] = useState<string | null>(null);
+  const [allocs, setAllocs] = useState<SessionAllocation[]>(session.allocations ?? []);
   const [closing, setClosing] = useState(false);
-
-  const toFixedDecimal = (units: bigint, decimals: number) => {
-    const neg = units < 0n;
-    const abs = neg ? -units : units;
-    const base = 10n ** BigInt(decimals);
-    const whole = abs / base;
-    const frac = (abs % base).toString().padStart(decimals, '0');
-    return `${neg ? '-' : ''}${whole.toString()}.${frac}`;
-  };
+  useEffect(() => {
+    setAllocs(session.allocations ?? []);
+    setAllocErrors(null);
+  }, [session.appSessionId, session.allocations]);
 
   // Source of truth: allocations (balances are per-account and differ per user).
   const sessionTotalNum = (session.allocations ?? []).reduce(
@@ -1126,6 +1118,11 @@ function SessionManageView({
     .reduce((s, a) => s + parseFloat(a.amount || '0'), 0)
     .toFixed(6);
 
+  const participantAddresses = (
+    session.participants?.map((p) => p.address).filter(Boolean) ??
+    allocs.map((a) => a.participant).filter(Boolean)
+  ) as string[];
+
   // Derived: find current user's allocation index
   const userAllocIdx = walletAddress
     ? allocs.findIndex((a) => a.participant.toLowerCase() === walletAddress.toLowerCase())
@@ -1133,15 +1130,37 @@ function SessionManageView({
   const userAllocIdxSafe = userAllocIdx >= 0 ? userAllocIdx : 0;
   const otherAllocIdx = allocs.length === 2 ? (userAllocIdxSafe === 0 ? 1 : 0) : -1;
   const myCurrentAlloc = parseFloat(allocs[userAllocIdxSafe]?.amount ?? '0');
+  // Both participants are registered in the session definition from creation —
+  // Yellow Network doesn't require allocation entries to enable transfers.
   const canTransfer =
-    (session.participants?.length ?? 0) === 2 &&
-    (session.participants ?? []).every((p) =>
-      (session.allocations ?? []).some((a) => a.participant?.toLowerCase() === p.toLowerCase())
-    );
+    (session.status ?? '').toLowerCase() === 'open' &&
+    (session.participants?.length ?? 0) >= 2;
   // Slider value derived from allocs (0 = all to counterparty, 100 = all to user)
   const sliderValue = sessionTotalNum > 0 ? (myCurrentAlloc / sessionTotalNum) * 100 : 50;
 
-  const validateOperate = (): boolean => {
+  function getSessionAllocMap(): Map<string, string> {
+    const map = new Map<string, string>();
+    for (const alloc of session.allocations ?? []) {
+      if (!alloc.participant) continue;
+      map.set(alloc.participant.toLowerCase(), alloc.amount ?? '0');
+    }
+    return map;
+  }
+
+  function buildDepositWithdrawPayload(
+    participant: string,
+    amount: string,
+  ): SessionAllocation[] {
+    return [
+      {
+        participant,
+        amount,
+        asset: session.token ?? DEFAULT_ASSET,
+      },
+    ];
+  }
+
+  function validateOperate(): boolean {
     const diff = Math.abs(parseFloat(allocTotal) - parseFloat(sessionTotal));
     if (diff > 0.000001) {
       setAllocErrors(
@@ -1149,87 +1168,20 @@ function SessionManageView({
       );
       return false;
     }
-    // Otherwise, only send the participant update to avoid accidentally decreasing others.
-    return [{ participant, amount: newAmount, asset: session.token ?? DEFAULT_ASSET }];
-  };
+    setAllocErrors(null);
+    return true;
+  }
 
-  const handleTransfer = async () => {
-    const amtNum = parseFloat(transferAmount);
-    if (!transferAmount || !Number.isFinite(amtNum) || amtNum <= 0) return;
+  async function handleOperate() {
+    if (!validateOperate()) return;
 
-    if (amtNum > myCurrentAlloc) {
-      window.alert('Insufficient balance');
-      return;
-    }
-
-    if (!meParticipant || participantAddresses.length < 2 || !counterpartyAddress) {
-      window.alert('Counterparty not joined');
-      return;
-    }
-
-    // Exact decimal arithmetic based on the raw allocation strings we got from backend.
-    // This avoids rounding/truncation that can break strict "sum == session total" validation.
-    const parseDecimal = (raw: string): { n: bigint; scale: number } => {
-      const v = String(raw).trim();
-      const neg = v.startsWith('-');
-      const unsigned = neg ? v.slice(1) : v;
-      const [wholePart, fracPart = ''] = unsigned.split('.');
-      const scale = fracPart.length;
-      const whole = wholePart && wholePart.length > 0 ? BigInt(wholePart) : 0n;
-      const frac = fracPart.length > 0 ? BigInt(fracPart) : 0n;
-      const n = whole * 10n ** BigInt(scale) + frac;
-      return { n: neg ? -n : n, scale };
-    };
-
-    const decimalToString = (n: bigint, scale: number): string => {
-      if (scale === 0) return n.toString();
-      const neg = n < 0n;
-      const abs = neg ? -n : n;
-      const base = 10n ** BigInt(scale);
-      const whole = abs / base;
-      const frac = abs % base;
-      const fracStr = frac.toString().padStart(scale, '0').replace(/0+$/, '');
-      return fracStr.length > 0 ? `${neg ? '-' : ''}${whole.toString()}.${fracStr}` : `${neg ? '-' : ''}${whole.toString()}`;
-    };
-
-    const myRaw = sessionAllocMap.get(meLower) ?? '0';
-    const otherRaw = sessionAllocMap.get(counterpartyAddress.toLowerCase()) ?? '0';
-
-    const myDec = parseDecimal(myRaw);
-    const otherDec = parseDecimal(otherRaw);
-    const amtDec = parseDecimal(transferAmount);
-
-    const commonScale = Math.max(myDec.scale, otherDec.scale, amtDec.scale);
-    const normalize = (d: { n: bigint; scale: number }) =>
-      d.n * 10n ** BigInt(commonScale - d.scale);
-
-    const myN = normalize(myDec);
-    const otherN = normalize(otherDec);
-    const amtN = normalize(amtDec);
-
-    if (amtN <= 0n) return;
-    if (amtN > myN) {
-      window.alert('Insufficient balance');
-      return;
-    }
-
-    const nextMyN = myN - amtN;
-    // Preserve exact sum by construction: nextOther = (my + other) - nextMy
-    const nextOtherN = myN + otherN - nextMyN;
-
-    await onPatch('OPERATE', [
-      {
-        participant: meParticipant,
-        amount: decimalToString(nextMyN, commonScale),
-        asset: session.token ?? DEFAULT_ASSET,
-      },
-      {
-        participant: counterpartyAddress,
-        amount: decimalToString(nextOtherN, commonScale),
-        asset: session.token ?? DEFAULT_ASSET,
-      },
-    ]);
-  };
+    const payload = allocs.map((a) => ({
+      participant: a.participant,
+      amount: a.amount,
+      asset: session.token ?? DEFAULT_ASSET,
+    }));
+    await onPatch('OPERATE', payload);
+  }
 
   const handleDeposit = async () => {
     const depositAmt = parseFloat(depositAmount);
@@ -1448,13 +1400,16 @@ function SessionManageView({
                         next[userAllocIdxSafe] = {
                           participant: next[userAllocIdxSafe]?.participant ?? '',
                           amount: userNew.toFixed(6),
+                          asset: next[userAllocIdxSafe]?.asset ?? (session.token ?? DEFAULT_ASSET),
                         };
                         next[otherAllocIdx] = {
                           participant: next[otherAllocIdx]?.participant ?? '',
                           amount: otherNew.toFixed(6),
+                          asset: next[otherAllocIdx]?.asset ?? (session.token ?? DEFAULT_ASSET),
                         };
                         return next;
                       });
+                      setAllocErrors(null);
                     }}
                     className="w-full appearance-none bg-transparent cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-gray-900 [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-white [&::-webkit-slider-thumb]:shadow-md [&::-webkit-slider-runnable-track]:h-0 [&::-moz-range-thumb]:h-5 [&::-moz-range-thumb]:w-5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-gray-900 [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-white [&::-moz-range-thumb]:shadow-md [&::-moz-range-thumb]:border-none"
                   />
@@ -1487,37 +1442,7 @@ function SessionManageView({
                   )}
                 </Button>
               </div>
-              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 space-y-1">
-                <p className="text-[10px] text-gray-400 uppercase tracking-wide">Counterparty Balance</p>
-                <p className="text-lg font-rubik-medium text-gray-900 leading-none mt-1">
-                  {counterpartyAlloc.toFixed(4)}
-                </p>
-                <p className="text-[10px] text-gray-400">{session.token?.toUpperCase()}</p>
-              </div>
-            </div>
-
-            <div>
-              <Label className="text-xs text-gray-700">Amount to send</Label>
-              <Input
-                type="number"
-                min="0"
-                step="any"
-                placeholder="0.00"
-                value={transferAmount}
-                onChange={(e) => setTransferAmount(e.target.value)}
-                className="h-8 text-sm mt-1 bg-white border-gray-300"
-              />
-            </div>
-
-                <Button
-                  onClick={handleOperate}
-                  disabled={operating || !canTransfer}
-                  className="w-full h-8 text-xs bg-gray-900 hover:bg-gray-700 text-white"
-                >
-                  {operating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Confirm Transfer'}
-                </Button>
-              </div>
-            )}
+            ) : null}
           </TabsContent>
 
           {/* Deposit to session tab */}
@@ -1684,13 +1609,15 @@ export function LightningNodesView() {
   );
   const closeDialog = () => setDialog((d) => ({ ...d, open: false }));
 
-  // Poll session detail every 10s when manage dialog is open (multi-client sync)
+  // Poll session detail every 30s when manage dialog is open (multi-client sync).
+  // Kept at 30s to avoid hammering the Yellow Network WebSocket — each poll
+  // triggers an auth + WS round-trip and Yellow rate-limits concurrent connections.
   useEffect(() => {
     if (!dialog.open || dialog.mode !== 'manage' || !dialog.managedSession) return;
     const id = dialog.managedSession.appSessionId;
     const interval = setInterval(() => {
       sessions.loadSessionDetail(id);
-    }, 10_000);
+    }, 30_000);
     return () => clearInterval(interval);
   }, [dialog.open, dialog.mode, dialog.managedSession?.appSessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1720,8 +1647,8 @@ export function LightningNodesView() {
           </h2>
           <p className="text-[11px] text-gray-500">
             Yellow Network off-chain payment channels
-          </p>
-        </div>
+                </p>
+              </div>
         <Select value={chain} onValueChange={setChain}>
           <SelectTrigger className="h-7 w-28 text-xs bg-white border-gray-300 text-gray-900">
             <SelectValue />
@@ -1838,8 +1765,12 @@ export function LightningNodesView() {
               .filter((s) => {
                 const me = auth.walletAddress?.toLowerCase();
                 if (!me) return false;
-                const self = s.participants?.find((p) => p.address.toLowerCase() === me);
-                return self?.joined === true;
+                // Yellow Network returns participants: null in many responses so
+                // normalised participants all get joined=false. Show the session
+                // whenever the user's address appears in the list OR when the
+                // participants list is empty (API already scopes to the authed user).
+                if (!s.participants?.length) return true;
+                return s.participants.some((p) => p.address.toLowerCase() === me);
               })
               .map((s) => (
               <SessionCard
@@ -1957,8 +1888,6 @@ export function LightningNodesView() {
                 session={managedSessionFresh}
                 balances={sessions.selectedSessionDetail.balances}
                 walletAddress={auth.walletAddress}
-                userId={userId}
-                chain={chain}
                 operating={sessions.operating}
                 onPatch={(intent, allocs) =>
                   sessions.patchSession(managedSessionFresh.appSessionId, intent, allocs)

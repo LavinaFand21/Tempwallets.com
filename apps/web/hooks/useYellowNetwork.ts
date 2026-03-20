@@ -351,9 +351,15 @@ export function useChannelActions(
               setStoredChannelId(null);
             }
           }
-          toast.success('Channel closed. Funds returned to custody available balance.');
-          onSuccess?.();
+          toast.success(
+            'Channel closed. Custody balance updating — may take 10–15 s for ClearNode to index the on-chain settlement.',
+          );
           setChannels((prev) => prev.filter((c) => c.channelId !== channelId));
+          // First refresh after 4 s: on-chain custody contract updates immediately
+          // after tx confirmation; ClearNode unified balance needs 10–15 s to index.
+          setTimeout(() => onSuccess?.(), 4_000);
+          // Second refresh after 15 s to catch ClearNode indexing lag.
+          setTimeout(() => onSuccess?.(), 15_000);
           return true;
         }
         toast.error(res.message || 'Channel close failed');

@@ -23,7 +23,6 @@ import { YELLOW_NETWORK_PORT } from '../../ports/yellow-network.port.js';
 import type { IWalletProviderPort } from '../../ports/wallet-provider.port.js';
 import { WALLET_PROVIDER_PORT } from '../../ports/wallet-provider.port.js';
 import { QuerySessionDto, QuerySessionResultDto } from './query-session.dto.js';
-import { PrismaService } from '../../../../database/prisma.service.js';
 
 @Injectable()
 export class QuerySessionUseCase {
@@ -32,7 +31,6 @@ export class QuerySessionUseCase {
     private readonly yellowNetwork: IYellowNetworkPort,
     @Inject(WALLET_PROVIDER_PORT)
     private readonly walletProvider: IWalletProviderPort,
-    private readonly prisma: PrismaService,
   ) {}
 
   async execute(dto: QuerySessionDto): Promise<QuerySessionResultDto> {
@@ -42,14 +40,15 @@ export class QuerySessionUseCase {
       dto.chain,
     );
 
-    // 2. Authenticate with Yellow Network
+    // 2. Authenticate with Yellow Network (reuses existing session when valid)
     await this.yellowNetwork.authenticate(dto.userId, walletAddress);
 
-    // 3. Query session from Yellow Network
+    // 3. Query session from Yellow Network — single source of truth, no DB sync
     const session = await this.yellowNetwork.querySession(dto.sessionId);
 
     // 4. Verify user is a participant
-    const isParticipant = session.definition.participants.some(
+    const participants = session.definition?.participants ?? [];
+    const isParticipant = participants.some(
       (p) => p.toLowerCase() === walletAddress.toLowerCase(),
     );
 
@@ -60,118 +59,32 @@ export class QuerySessionUseCase {
       );
     }
 
-    // 5. Mark requesting user as joined in local DB (deterministic join state)
-    const localNode = await this.prisma.lightningNode.findUnique({
-      where: { appSessionId: session.app_session_id },
-      include: { participants: true },
-    });
+    // 5. Build response — derive token and ensure every participant has an allocation
+    const allocations = session.allocations ?? [];
+    const token = allocations.find((a: any) => a.asset)?.asset ?? 'usdc';
 
-    if (localNode) {
-      const participantRow = localNode.participants.find(
-        (p) => p.address.toLowerCase() === walletAddress.toLowerCase(),
-      );
-      if (participantRow && participantRow.status !== 'joined') {
-        await this.prisma.lightningNodeParticipant.update({
-          where: { id: participantRow.id },
-          data: {
-            status: 'joined',
-            joinedAt: new Date(),
-            lastSeenAt: new Date(),
-          } as any,
-        });
-      }
-    } else {
-      const participants = session.definition.participants || [];
-      const weights = session.definition.weights || [];
-      const allocations = session.allocations || [];
-      const token = allocations.find((a) => a.asset)?.asset ?? 'usdc';
-      const allocMap = new Map(
-        allocations.map((a) => [a.participant.toLowerCase(), a.amount]),
-      );
-      await this.prisma.lightningNode.create({
-        data: {
-          userId: dto.userId,
-          appSessionId: session.app_session_id,
-          uri: `lightning://${session.app_session_id}`,
-          chain: dto.chain,
-          token,
-          status: session.status,
-          maxParticipants: participants.length,
-          quorum: session.definition.quorum,
-          protocol: session.definition.protocol,
-          challenge: session.definition.challenge,
-          sessionData: session.session_data,
-          participants: {
-            create: participants.map((address, idx) => {
-              const isMe = address.toLowerCase() === walletAddress.toLowerCase();
-              return {
-                address,
-                weight: weights[idx] ?? 0,
-                balance: allocMap.get(address.toLowerCase()) ?? '0',
-                asset: token,
-                status: isMe ? 'joined' : 'invited',
-                joinedAt: isMe ? new Date() : undefined,
-                lastSeenAt: isMe ? new Date() : undefined,
-              };
-            }),
-          },
-        },
-      });
-    }
-
-    const refreshedNode = await this.prisma.lightningNode.findUnique({
-      where: { appSessionId: session.app_session_id },
-      include: { participants: true },
-    });
-
-    // 6. Return session data — include top-level participants, chain, and token
-    //    so the frontend AppSession type is fully populated.
-    //    If Yellow returns empty allocations, fall back to local DB balances.
-    const dbToken = (refreshedNode?.token ?? localNode?.token ?? '').toLowerCase();
-    const sessionAllocs = session.allocations ?? [];
-    const dbParticipants = refreshedNode?.participants ?? localNode?.participants ?? [];
-    const dbAllocs =
-      dbParticipants.length > 0
-        ? dbParticipants.map((p) => ({
-            participant: p.address,
-            asset: (p.asset || dbToken || 'usdc').toLowerCase(),
-            amount: p.balance ?? '0',
-          }))
-        : [];
-    const allocations = sessionAllocs.length > 0 ? sessionAllocs : dbAllocs;
-    const token =
-      allocations.find((a) => a.asset)?.asset || dbToken || 'usdc';
-
-    const participants = session.definition.participants || [];
     const assets = [
       ...new Set(
         (allocations.length > 0 ? allocations : token ? [{ asset: token }] : []).map(
-          (a: any) => a.asset?.toLowerCase?.() ?? a.asset,
-        ),
+          (a: any) => (a.asset ?? '').toLowerCase(),
+        ).filter(Boolean),
       ),
     ];
-    const dbAllocMap = new Map(
-      dbAllocs.map((a) => [
-        `${a.participant.toLowerCase()}|${a.asset.toLowerCase()}`,
-        a.amount,
-      ]),
-    );
-    const completeAllocations: typeof allocations = [];
-    for (const asset of assets) {
-      for (const address of participants) {
-        const existing = allocations.find(
-          (a) =>
-            a.participant.toLowerCase() === address.toLowerCase() &&
-            a.asset.toLowerCase() === asset,
-        );
-        completeAllocations.push({
-          participant: address,
-          asset,
-          amount:
-            existing?.amount ??
-            dbAllocMap.get(`${address.toLowerCase()}|${asset.toLowerCase()}`) ??
-            '0',
-        });
+    const completeAllocations: Array<{ participant: string; asset: string; amount: string }> = [];
+    if (assets.length > 0 && participants.length > 0) {
+      for (const asset of assets) {
+        for (const address of participants) {
+          const existing = allocations.find(
+            (a: any) =>
+              a.participant?.toLowerCase() === address.toLowerCase() &&
+              (a.asset ?? '').toLowerCase() === asset,
+          );
+          completeAllocations.push({
+            participant: address,
+            asset,
+            amount: existing?.amount ?? '0',
+          });
+        }
       }
     }
 
@@ -181,14 +94,11 @@ export class QuerySessionUseCase {
       version: session.version,
       chain: dto.chain,
       token,
+      // Mark the querying wallet as joined=true — Yellow Network returning
+      // this session means the user is an active participant.
       participants: participants.map((address) => ({
         address,
-        joined:
-          refreshedNode?.participants.some(
-            (p) =>
-              p.address.toLowerCase() === address.toLowerCase() &&
-              p.status === 'joined',
-          ) ?? false,
+        joined: address.toLowerCase() === walletAddress.toLowerCase(),
       })),
       definition: session.definition,
       allocations: completeAllocations.length > 0 ? completeAllocations : allocations,
