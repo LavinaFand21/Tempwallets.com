@@ -21,6 +21,17 @@ const nextConfig = {
   },
   // Removed global font preload - WalletConnect SDK loads fonts on-demand
   // This prevents "preload not used" warnings on pages that don't use WalletConnect
+  async rewrites() {
+    return [
+      {
+        source: '/about',
+        destination: 'https://temp-wallets-website-31wb.vercel.app',
+      },
+      {
+        source: '/about/:path*',
+        destination: 'https://temp-wallets-website-31wb.vercel.app/:path*',
+      },
+    ]
+  },
 };
-
 export default nextConfig;
