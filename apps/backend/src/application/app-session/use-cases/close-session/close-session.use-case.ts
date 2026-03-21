@@ -24,7 +24,6 @@ import { YELLOW_NETWORK_PORT } from '../../ports/yellow-network.port.js';
 import type { IWalletProviderPort } from '../../ports/wallet-provider.port.js';
 import { WALLET_PROVIDER_PORT } from '../../ports/wallet-provider.port.js';
 import { CloseSessionDto, CloseSessionResultDto } from './close-session.dto.js';
-import { PrismaService } from '../../../../database/prisma.service.js';
 
 @Injectable()
 export class CloseSessionUseCase {
@@ -33,7 +32,6 @@ export class CloseSessionUseCase {
     private readonly yellowNetwork: IYellowNetworkPort,
     @Inject(WALLET_PROVIDER_PORT)
     private readonly walletProvider: IWalletProviderPort,
-    private readonly prisma: PrismaService,
   ) {}
 
   async execute(dto: CloseSessionDto): Promise<CloseSessionResultDto> {
@@ -67,14 +65,13 @@ export class CloseSessionUseCase {
       );
     }
 
-    // 6. Build COMPLETE final allocations (every participant must be listed).
+    // 6. Drain session before closing.
     //
-    // Yellow's `getLightningNode` allocations can be partial depending on
-    // requester; any missing participant+asset allocation must not be forced to 0,
-    // otherwise close will fail with "asset ... not fully redistributed".
-    //
-    // We fill missing values from local DB (lightning_node_participant.balance),
-    // which we maintain from Yellow state after each successful mutation.
+    // ClearNode requires close allocations to match internal state exactly.
+    // Reconstructing per-participant allocations from ledger totals is unreliable
+    // (ledger returns per-asset sums, not per-participant). Instead, we first
+    // WITHDRAW all funds (set every participant to 0), which returns everything
+    // to unified balances. Then close with all-zero allocations.
     const allParticipants = session.definition.participants ?? [];
     const sessionAllocs = session.allocations ?? [];
 
@@ -87,47 +84,34 @@ export class CloseSessionUseCase {
     ];
     if (assets.length === 0) assets.push('usdc');
 
-    const localNode = await this.prisma.lightningNode.findUnique({
-      where: { appSessionId: dto.appSessionId },
-      include: { participants: true },
-    });
-
-    const sessionAllocMap = new Map(
-      sessionAllocs.map((a: any) => [
-        `${String(a.participant).toLowerCase()}|${String(a.asset).toLowerCase()}`,
-        a.amount ?? '0',
-      ]),
-    );
-
-    const dbAllocMap = new Map<string, string>(
-      (localNode?.participants ?? []).map((p) => [
-        `${p.address.toLowerCase()}|${p.asset.toLowerCase()}`,
-        p.balance ?? '0',
-      ]),
-    );
-
-    const finalAllocations: Array<{
+    const zeroAllocations: Array<{
       participant: string;
       asset: string;
       amount: string;
     }> = [];
-
     for (const asset of assets) {
       for (const p of allParticipants) {
-        const key = `${p.toLowerCase()}|${asset.toLowerCase()}`;
-        const amount = sessionAllocMap.get(key) ?? dbAllocMap.get(key) ?? '0';
-        finalAllocations.push({
-          participant: p,
-          asset,
-          amount,
-        });
+        zeroAllocations.push({ participant: p, asset, amount: '0' });
       }
     }
 
-    // 7. Close session with Yellow Network
+    // Always drain: set all allocations to 0 via WITHDRAW.
+    // This is safe even if the session is already at zero (just bumps version).
+    // It guarantees all funds are returned to unified balances before close.
+    console.log(
+      `[CloseSession] Draining session ${dto.appSessionId} before close...`,
+    );
+    await this.yellowNetwork.updateSession({
+      sessionId: dto.appSessionId,
+      intent: 'WITHDRAW',
+      allocations: zeroAllocations,
+    });
+    console.log(`[CloseSession] Session drained successfully`);
+
+    // 7. Close session with Yellow Network (all allocations are now 0)
     await this.yellowNetwork.closeSession(
       dto.appSessionId,
-      finalAllocations,
+      zeroAllocations,
     );
 
     // 8. Return result

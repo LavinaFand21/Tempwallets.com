@@ -85,6 +85,23 @@ export interface ICustodyContractPort {
     tokenAddress: string;
     amount: bigint;
   }): Promise<{ channelId: string; credited: boolean }>;
+
+  /**
+   * Reverse of creditUnifiedBalanceFromCustody — moves funds from
+   * unified balance back to custody free via a reverse resize.
+   *
+   * resize_amount = -X (channel → custody), allocate_amount = -X (unified → channel)
+   * Net effect: unified -X → custody free +X
+   *
+   * Must be called before custody.withdraw() so funds are available on-chain.
+   */
+  debitUnifiedBalanceToCustody(params: {
+    userId: string;
+    chain: string;
+    userAddress: string;
+    tokenAddress: string;
+    amount: bigint;
+  }): Promise<{ channelId: string; debited: boolean }>;
 }
 
 /**

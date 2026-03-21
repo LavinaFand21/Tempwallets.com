@@ -142,6 +142,7 @@ export class DepositToCustodyUseCase {
 
     console.log(`\n--- Step 3: Crediting Unified Balance via resize_channel ---`);
     let creditedChannelId: string | undefined;
+    let creditStepError: string | null = null;
     try {
       const credit = await this.custodyContract.creditUnifiedBalanceFromCustody(
         {
@@ -157,8 +158,9 @@ export class DepositToCustodyUseCase {
         `[DepositToCustodyUseCase] resize_channel sent via channel ${credit.channelId}`,
       );
     } catch (err: any) {
+      creditStepError = err?.message ?? String(err);
       console.warn(
-        `[DepositToCustodyUseCase] Could not trigger unified ledger credit step: ${err?.message ?? err}`,
+        `[DepositToCustodyUseCase] Could not trigger unified ledger credit step: ${creditStepError}`,
       );
     }
 
@@ -209,6 +211,15 @@ export class DepositToCustodyUseCase {
     console.log(`Approve TX: ${approveTxHash}`);
     console.log(`Deposit TX: ${depositTxHash}`);
     console.log(`Unified Balance: ${unifiedBalance}`);
+
+    if (parseFloat(unifiedBalance) <= 0) {
+      const reason =
+        creditStepError ??
+        'Unified balance is still zero after deposit and indexing wait.';
+      throw new BadRequestException(
+        `Deposit confirmed on-chain, but unified balance was not credited yet. Reason: ${reason}`,
+      );
+    }
 
     return {
       success: true,

@@ -643,13 +643,15 @@ export class SDKChannelService {
     proofState?: any,
   ): Promise<ChannelState> {
     const resizeAmount = amount;
-    // Correct sign convention per Yellow Network 0.5.x migration guide (line 43 + 134):
-    //   resize_amount = +X  → lock X from custody free into channel adjudicator (on-chain)
-    //   allocate_amount = -X → move X from channel to unified balance (off-chain credit)
-    //   Golden rule: resize_amount = -allocate_amount
-    // Net effect: custody free -X, channel 0, unified balance +X (available for app sessions)
-    // ClearNode will return allocations = [0, 0] — this is EXPECTED, not an error.
-    // See: docs_guides_migration-guide.md lines 137-142
+    // Yellow 0.5.x semantics require opposite signs for pass-through resizing:
+    //   resize_amount = +X   -> lock X into channel on-chain
+    //   allocate_amount = -X -> withdraw X from channel to unified balance
+    // Net effect:
+    //   custody free -X -> channel (transient) -> unified +X
+    // Channel ends with zero allocations, which ClearNode requires before
+    // allowing app session creation ("non-zero allocation" error otherwise).
+    // For negative amounts, the signs invert naturally and funds move back
+    // toward custody free.
     const allocateAmount = -resizeAmount;
 
     // Step 1: Request resize from ClearNode with aggressive retry for indexing delays
@@ -664,7 +666,14 @@ export class SDKChannelService {
       // Custom retry logic: retry on "not found" because ClearNode indexer lags
       (error) => {
         const msg = error.message?.toLowerCase() || '';
-        return msg.includes('not found') || this.isDefaultRetryableError(msg);
+        const isIndexerLagBalanceError =
+          msg.includes('insufficient unified balance') &&
+          msg.includes('available 0');
+        return (
+          msg.includes('not found') ||
+          isIndexerLagBalanceError ||
+          this.isDefaultRetryableError(msg)
+        );
       },
     );
 
@@ -844,18 +853,16 @@ export class SDKChannelService {
       ? hashWithAbsolute
       : hashWithZero;
 
-    // When allocate_amount = -resize_amount (correct deposit-to-unified pattern), ClearNode
-    // returns allocations = [0, 0] for the channel. This is EXPECTED — it means all funds
-    // were directed to the unified balance (off-chain). The on-chain tx must still proceed
-    // to transfer the custody free balance into the channel pool.
-    //
-    // SAFETY: Only skip if allocate_amount was 0 (legacy/unexpected case) AND allocs are zero.
-    // That case would dangerously transfer user custody funds to clearnode with no benefit.
+    // Safety guard: when allocate_amount != 0, ClearNode returns [0,0] allocations
+    // because funds moved through the channel to unified (or vice-versa). This is
+    // the EXPECTED case — the on-chain tx must still proceed to lock/unlock custody.
+    // Only skip the on-chain tx when allocate_amount = 0 AND allocations are zero,
+    // which would indicate an unexpected ClearNode response (catastrophic if submitted).
     const allZeroAllocations = finalAllocations.every((a) => a.amount === 0n);
     if (allZeroAllocations && allocateAmount === 0n) {
       console.warn(
         '[SDKChannelService] Unexpected zero allocations from ClearNode with allocate_amount=0 — ' +
-          'skipping on-chain resize tx to prevent unintended fund transfer. Check ClearNode state.',
+          'skipping on-chain resize tx to prevent fund loss. Check ClearNode state.',
       );
       return {
         intent: resizeState.intent as StateIntent,
@@ -868,10 +875,8 @@ export class SDKChannelService {
       };
     }
 
-    // Step 5: Sign resize state
-    // NOTE: zero channel allocations here are expected when allocate_amount = -resize_amount
-    // (all funds credited to unified balance). The on-chain tx correctly encodes the
-    // [resize_amount, allocate_amount] deltas in state.data for the custody contract.
+    // Step 5: Sign resize state — reached when allocations are non-zero, OR when
+    // allocate_amount != 0 (channel acts as pass-through, [0,0] allocations expected).
     const userResizeSig = await walletAccount.sign({ hash: resizeStateHash });
     const signedResizeState = {
       intent: resizeState.intent,

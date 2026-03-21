@@ -25,6 +25,8 @@ import type { IYellowNetworkPort } from '../../ports/yellow-network.port.js';
 import { YELLOW_NETWORK_PORT } from '../../ports/yellow-network.port.js';
 import type { IWalletProviderPort } from '../../ports/wallet-provider.port.js';
 import { WALLET_PROVIDER_PORT } from '../../ports/wallet-provider.port.js';
+import type { IChannelManagerPort } from '../../../channel/ports/channel-manager.port.js';
+import { CHANNEL_MANAGER_PORT } from '../../../channel/ports/channel-manager.port.js';
 import { AppSession } from '../../../../domain/app-session/entities/app-session.entity.js';
 import { SessionDefinition } from '../../../../domain/app-session/value-objects/session-definition.vo.js';
 import { Allocation } from '../../../../domain/app-session/value-objects/allocation.vo.js';
@@ -40,6 +42,8 @@ export class CreateAppSessionUseCase {
     private readonly yellowNetwork: IYellowNetworkPort,
     @Inject(WALLET_PROVIDER_PORT)
     private readonly walletProvider: IWalletProviderPort,
+    @Inject(CHANNEL_MANAGER_PORT)
+    private readonly channelManager: IChannelManagerPort,
   ) {}
 
   async execute(dto: CreateAppSessionDto): Promise<CreateAppSessionResultDto> {
@@ -84,67 +88,86 @@ export class CreateAppSessionUseCase {
         alloc.amount,
       ),
     );
+    const allocatedParticipants = new Set(
+      allocations.map((a) => a.participant.toLowerCase()),
+    );
+    for (const address of definition.participants) {
+      if (allocatedParticipants.has(address.toLowerCase())) continue;
+      allocations.push(
+        Allocation.create(address, dto.token.toLowerCase(), '0'),
+      );
+    }
 
     // 8. Create domain entity (validates all business rules)
     const session = AppSession.create(definition, allocations);
 
+    // 9. Proactively close stale/open channels before app session creation.
+    // ClearNode rejects create_app_session while any owned channel has non-zero allocation.
+    const chainId = this.getChainId(dto.chain);
+    await this.closeAllOpenChannels(creatorAddress, chainId);
+
     // 9. Register with Yellow Network
-    // Handle the common error where funds are locked in payment channels
-    try {
-      const yellowResponse = await this.yellowNetwork.createSession({
-        sessionId: session.id.value, 
-        definition: definition.toYellowFormat(),
-        allocations: allocations.map((a) => a.toYellowFormat()),
-      });
+    // Channels are closed after deposit so this should succeed on first try.
+    // Retry once as a safety net in case ClearNode hasn't indexed the close yet.
+    const MAX_ATTEMPTS = 3;
+    const RETRY_DELAY_MS = 8000;
+    let lastError: unknown;
 
-      // 10. Return result (NO database storage)
-      // Yellow Network returns `participants: null` in the create response so we
-      // fall back to the definition participants we sent (always available locally).
-      const definitionParticipants = definition.participants;
-      const normalizedAllocationParticipants = new Set(
-        (yellowResponse.allocations || []).map((alloc) =>
-          alloc.participant.toLowerCase(),
-        ),
-      );
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        const yellowResponse = await this.yellowNetwork.createSession({
+          sessionId: session.id.value,
+          definition: definition.toYellowFormat(),
+          allocations: allocations.map((a) => a.toYellowFormat()),
+        });
 
-      return {
-        appSessionId: yellowResponse.app_session_id,
-        status: yellowResponse.status,
-        version: yellowResponse.version,
-        participants: definitionParticipants.map((address: string) => ({
-          address,
-          // Derive joined from allocation presence.
-          // Creator always has an allocation entry (even if 0), so mark joined=true
-          // when the allocations list is empty (no allocations means no filter).
-          joined:
-            normalizedAllocationParticipants.size === 0
-              ? true
-              : normalizedAllocationParticipants.has(address.toLowerCase()),
-        })),
-        allocations: yellowResponse.allocations,
-      };
-    } catch (error) {
-      // Check if this is the "funds locked in channel" error
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      if (errorMsg.includes('non-zero allocation') && errorMsg.includes('channel')) {
-        throw new BadRequestException(
-          'Cannot create app session: Your funds are currently locked in an active payment channel. ' +
-          '\n\n📍 Yellow Network Architecture:' +
-          '\n  • Payment Channels pull from: Custody Contract (on-chain)' +
-          '\n  • App Sessions pull from: Unified Balance (off-chain)' +
-          '\n\n✅ Solution:' +
-          '\n  1. Close your active payment channel(s) first' +
-          '\n  2. Funds will return to custody "available balance"' +
-          '\n  3. This makes them available in your "unified balance"' +
-          '\n  4. Then create the app session' +
-          '\n\n💡 Fund Flow: Payment Channel → Custody (available) → Unified Balance → App Session' +
-          '\n\nOriginal error: ' + errorMsg
+        const definitionParticipants = definition.participants;
+        const normalizedAllocationParticipants = new Set(
+          (yellowResponse.allocations || []).map((alloc) =>
+            alloc.participant.toLowerCase(),
+          ),
         );
+
+        return {
+          appSessionId: yellowResponse.app_session_id,
+          status: yellowResponse.status,
+          version: yellowResponse.version,
+          participants: definitionParticipants.map((address: string) => ({
+            address,
+            joined:
+              normalizedAllocationParticipants.size === 0
+                ? true
+                : normalizedAllocationParticipants.has(address.toLowerCase()),
+          })),
+          allocations: yellowResponse.allocations,
+        };
+      } catch (error) {
+        lastError = error;
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        const isChannelLag =
+          errorMsg.includes('non-zero allocation') &&
+          errorMsg.includes('channel');
+
+        if (isChannelLag && attempt < MAX_ATTEMPTS) {
+          console.log(
+            `[CreateAppSession] Channel allocation not yet cleared (attempt ${attempt}/${MAX_ATTEMPTS}), retrying in ${RETRY_DELAY_MS}ms...`,
+          );
+          await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+          continue;
+        }
+
+        if (isChannelLag) {
+          throw new BadRequestException(
+            'Cannot create app session: an active payment channel still has locked funds. ' +
+              'Please wait a moment and try again.',
+          );
+        }
+
+        throw error;
       }
-      
-      // Re-throw other errors
-      throw error;
     }
+
+    throw lastError;
   }
 
   /**
@@ -179,5 +202,50 @@ export class CreateAppSessionUseCase {
     }
 
     return participants;
+  }
+
+  private getChainId(chain: string): number {
+    const chainIdMap: Record<string, number> = {
+      ethereum: 1,
+      base: 8453,
+      arbitrum: 42161,
+      avalanche: 43114,
+    };
+    const chainId = chainIdMap[chain.toLowerCase()];
+    if (!chainId) throw new BadRequestException(`Unsupported chain: ${chain}`);
+    return chainId;
+  }
+
+  private async closeAllOpenChannels(
+    userAddress: string,
+    chainId: number,
+  ): Promise<void> {
+    const openChannels = await this.channelManager.getChannels(userAddress);
+    if (openChannels.length === 0) return;
+
+    console.log(
+      `[CreateAppSession] Found ${openChannels.length} open channel(s). Closing before create_app_session...`,
+    );
+
+    for (const channel of openChannels) {
+      try {
+        await this.channelManager.closeChannel(
+          channel.channelId,
+          chainId,
+          userAddress,
+        );
+        console.log(
+          `[CreateAppSession] Closed stale channel ${channel.channelId}`,
+        );
+      } catch (error) {
+        console.warn(
+          `[CreateAppSession] Failed to close stale channel ${channel.channelId}:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
+    }
+
+    // Allow ClearNode indexers to observe close transactions before create_app_session.
+    await new Promise((r) => setTimeout(r, 5000));
   }
 }

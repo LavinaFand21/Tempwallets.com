@@ -574,8 +574,32 @@ export class QueryService {
       );
     }
 
+    // Ensure every definition participant has an allocation entry.
+    // ClearNode's ledger balances are per-asset totals (not per-participant),
+    // so participants with 0 balance are missing from allocations. We backfill
+    // them with "0" so the OPERATE guard sees all participants as "joined".
+    function ensureAllParticipants(
+      allocs: import('./types.js').AppSessionAllocation[],
+      parts: readonly string[],
+    ): import('./types.js').AppSessionAllocation[] {
+      if (parts.length === 0) return allocs;
+      const present = new Set(allocs.map((a) => a.participant.toLowerCase()));
+      const asset =
+        allocs[0]?.asset ?? 'usdc';
+      const filled = [...allocs];
+      for (const addr of parts) {
+        if (!present.has(addr.toLowerCase())) {
+          filled.push({
+            participant: addr as `0x${string}`,
+            asset,
+            amount: '0',
+          });
+        }
+      }
+      return filled;
+    }
+
     if (session) {
-      // If the session list had allocations, use them; otherwise use what we got from ledger
       const sessionAllocations =
         session.allocations && session.allocations.length > 0
           ? session.allocations
@@ -583,20 +607,20 @@ export class QueryService {
       return {
         ...session,
         definition,
-        allocations: sessionAllocations,
+        allocations: ensureAllParticipants(sessionAllocations, participants),
       };
     }
 
     // Step 4: Session not in paginated list, but definition exists — build a minimal AppSession
     console.warn(
-      `[QueryService] ⚠️ Session not in paginated list, building from definition (${participants.length} participants)`,
+      `[QueryService] Session not in paginated list, building from definition (${participants.length} participants)`,
     );
     return {
       app_session_id: appSessionId,
       status: 'open',
       version: 1,
       session_data: '{}',
-      allocations,
+      allocations: ensureAllParticipants(allocations, participants),
       definition,
       createdAt: new Date(),
       updatedAt: new Date(),

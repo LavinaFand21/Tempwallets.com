@@ -3,20 +3,23 @@
  *
  * Application Layer - Business Operation
  *
- * Withdraws funds from Yellow Network custody contract back to user's wallet.
- * This is the FINAL STEP in the settlement flow.
+ * Withdraws funds from Yellow Network unified balance back to user's wallet
+ * in a single operation:
+ *   1. Reverse resize: unified → channel → custody free
+ *   2. custody.withdraw(): custody free → user's wallet (on-chain)
  *
  * Business Flow:
  * 1. Get user's wallet address and private key
  * 2. Convert amount to smallest units (6 decimals)
  * 3. Resolve chain ID and token address
- * 4. Call custody contract withdraw (on-chain)
- * 5. Fetch updated unified balance
- * 6. Return result
+ * 4. Reverse resize to move funds from unified to custody free
+ * 5. Withdraw from custody contract to wallet (on-chain)
+ * 6. Fetch updated unified balance
+ * 7. Return result
  *
  * Prerequisites:
- * - Channel must be closed (funds returned to unified balance)
  * - Sufficient unified balance available
+ * - An open channel exists (created during deposit)
  */
 
 import { Injectable, Inject, BadRequestException } from '@nestjs/common';
@@ -45,7 +48,7 @@ export class WithdrawFromCustodyUseCase {
   async execute(
     dto: WithdrawFromCustodyDto,
   ): Promise<WithdrawFromCustodyResultDto> {
-    console.log(`\n=== WITHDRAW FROM CUSTODY ===`);
+    console.log(`\n=== WITHDRAW FROM UNIFIED BALANCE ===`);
     console.log(`User: ${dto.userId}`);
     console.log(`Chain: ${dto.chain}`);
     console.log(`Asset: ${dto.asset}`);
@@ -113,8 +116,48 @@ export class WithdrawFromCustodyUseCase {
     console.log(`Chain ID: ${chainId}`);
     console.log(`Token address: ${tokenAddress}`);
 
-    // 4. Withdraw from custody contract (ON-CHAIN)
-    console.log(`\n--- Withdraw from Custody ---`);
+    // 4. Check custody free balance — only reverse resize if needed
+    console.log(`\n--- Step 1: Check Custody Free Balance ---`);
+    const availableHuman = await this.custodyContract.getAvailableBalance(
+      userAddress,
+      tokenAddress,
+      chainId,
+    );
+    const available = BigInt(
+      Math.floor(parseFloat(availableHuman) * Math.pow(10, decimals)),
+    );
+    console.log(
+      `[WithdrawUseCase] Custody free: ${available}, need: ${amountInSmallestUnits}`,
+    );
+
+    if (available < amountInSmallestUnits) {
+      const deficit = amountInSmallestUnits - available;
+      console.log(
+        `\n--- Step 2: Reverse Resize for deficit ${deficit} (unified → custody free) ---`,
+      );
+      try {
+        const { channelId } =
+          await this.custodyContract.debitUnifiedBalanceToCustody({
+            userId: dto.userId,
+            chain: dto.chain,
+            userAddress,
+            tokenAddress,
+            amount: deficit,
+          });
+        console.log(
+          `[WithdrawUseCase] Reverse resize complete via channel ${channelId}`,
+        );
+      } catch (err: any) {
+        throw new BadRequestException(
+          `Insufficient funds. Custody free: ${available}, unified could not cover deficit: ${err?.message ?? err}`,
+        );
+      }
+    } else {
+      console.log(`[WithdrawUseCase] Custody free sufficient, skipping reverse resize`);
+    }
+
+    // 5. Withdraw from custody contract to wallet (ON-CHAIN)
+    console.log(`\n--- Step 3: Custody Withdraw (custody free → wallet) ---`);
     const withdrawTxHash = await this.custodyContract.withdraw({
       userPrivateKey,
       userAddress,
@@ -123,7 +166,7 @@ export class WithdrawFromCustodyUseCase {
       amount: amountInSmallestUnits,
     });
 
-    // 5. Fetch updated unified balance
+    // 6. Fetch updated unified balance
     let unifiedBalance = '0';
     try {
       await this.yellowNetwork.authenticate(dto.userId, userAddress);
@@ -142,7 +185,7 @@ export class WithdrawFromCustodyUseCase {
       }
     } catch (err) {
       console.warn(
-        '[WithdrawFromCustodyUseCase] Failed to fetch unified balance after withdraw:',
+        '[WithdrawUseCase] Failed to fetch unified balance after withdraw:',
         err,
       );
     }
@@ -159,8 +202,7 @@ export class WithdrawFromCustodyUseCase {
       asset: dto.asset,
       unifiedBalance,
       message:
-        `Successfully withdrew ${dto.amount} ${dto.asset} from custody. ` +
-        `Funds sent to wallet ${userAddress}.`,
+        `Successfully withdrew ${dto.amount} ${dto.asset} from unified balance to wallet ${userAddress}.`,
     };
   }
 }

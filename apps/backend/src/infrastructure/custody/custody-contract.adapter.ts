@@ -17,7 +17,7 @@
 
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createPublicClient, createWalletClient, http, Address } from 'viem';
+import { createPublicClient, createWalletClient, http, Address, encodeFunctionData } from 'viem';
 import { base, arbitrum } from 'viem/chains';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { IYellowNetworkPort } from '../../application/app-session/ports/yellow-network.port.js';
@@ -230,6 +230,39 @@ export class CustodyContractAdapter implements ICustodyContractPort {
       address: account.address,
       blockTag: 'pending',
     });
+
+    // Preflight: estimate gas for both txs and verify ETH balance covers them
+    const [ethBalance, gasPrice, approveGas, depositGas] = await Promise.all([
+      publicClient.getBalance({ address: account.address }),
+      publicClient.getGasPrice(),
+      publicClient.estimateGas({
+        account,
+        to: tokenAddress as Address,
+        data: encodeFunctionData({
+          abi: ERC20_ABI,
+          functionName: 'approve',
+          args: [custodyAddress, amount],
+        }),
+      }).catch(() => 60_000n),
+      publicClient.estimateGas({
+        account,
+        to: custodyAddress,
+        data: encodeFunctionData({
+          abi: CUSTODY_ABI,
+          functionName: 'deposit',
+          args: [account.address as Address, tokenAddress as Address, amount],
+        }),
+      }).catch(() => 100_000n),
+    ]);
+
+    const totalGasCost = (approveGas + depositGas) * gasPrice * 120n / 100n;
+    if (ethBalance < totalGasCost) {
+      const haveEth = (Number(ethBalance) / 1e18).toFixed(6);
+      const needEth = (Number(totalGasCost) / 1e18).toFixed(6);
+      throw new Error(
+        `Insufficient ETH for gas: have ${haveEth} ETH, need ~${needEth} ETH for approve+deposit. Please top up your wallet with ETH on ${chain.name}.`,
+      );
+    }
 
     // --- approve (nonce N) ---
     const approveHash = await walletClient.writeContract({
@@ -461,9 +494,158 @@ export class CustodyContractAdapter implements ICustodyContractPort {
     // Ensure Yellow auth is established
     await this.yellowNetwork.authenticate(userId, userAddress);
 
-    // Ensure we have an open channel; create a zero-balance one if needed.
-    // NOTE: get_channels can return channels not owned by the authenticated wallet;
-    // our adapter filters, but as a fallback we also parse the "already exists" error.
+    // Close any existing open channels first. Stale channels accumulate
+    // on-chain locked allocations that block both resizes (InsufficientBalance)
+    // and app session creation (non-zero allocation error).
+    const existing = await this.channelManager.getChannels(userAddress);
+    for (const ch of existing) {
+      if (ch.status === 'open' || ch.status === 'active') {
+        try {
+          console.log(`[CustodyAdapter] Closing stale channel ${ch.channelId}...`);
+          await this.channelManager.closeChannel(ch.channelId, chainId, userAddress);
+          console.log(`[CustodyAdapter] Stale channel ${ch.channelId} closed`);
+        } catch (closeErr) {
+          console.warn(
+            `[CustodyAdapter] Could not close stale channel ${ch.channelId}:`,
+            closeErr instanceof Error ? closeErr.message : closeErr,
+          );
+        }
+      }
+    }
+
+    // Create a fresh channel for this deposit.
+    // If ClearNode briefly reports "already exists" right after close, only reuse
+    // that channel when it is truly open/active; otherwise wait and retry create.
+    const createAttempts = 3;
+    let channelId: string | undefined;
+    let lastCreateError: unknown;
+    for (let attempt = 1; attempt <= createAttempts; attempt++) {
+      try {
+        const created = await this.channelManager.createChannel({
+          userAddress,
+          chainId,
+          tokenAddress,
+          initialBalance: 0n,
+        });
+        channelId = created.channelId;
+        break;
+      } catch (err: any) {
+        lastCreateError = err;
+        const msg = String(err?.message ?? '');
+        const match = msg.match(/already exists[:\s]+(0x[a-fA-F0-9]{64})/);
+        if (!match?.[1]) throw err;
+
+        const existingChannelId = match[1];
+        const channels = await this.channelManager.getChannels(userAddress);
+        const existing = channels.find((ch) => ch.channelId === existingChannelId);
+        const status = (existing?.status || '').toLowerCase();
+        const isUsable = status === 'open' || status === 'active';
+
+        if (isUsable) {
+          channelId = existingChannelId;
+          break;
+        }
+
+        if (attempt === createAttempts) {
+          throw new BadRequestException(
+            `Channel creation is still indexing and returned a non-usable existing channel (${existingChannelId}, status=${status || 'unknown'}). Please retry in a few seconds.`,
+          );
+        }
+
+        const delayMs = 2000 * attempt;
+        console.warn(
+          `[CustodyAdapter] createChannel attempt ${attempt}/${createAttempts} returned non-usable existing channel ` +
+            `${existingChannelId} (status=${status || 'unknown'}). Retrying in ${delayMs}ms...`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+    if (!channelId) {
+      throw (
+        lastCreateError ??
+        new BadRequestException('Failed to create a usable channel for deposit.')
+      );
+    }
+
+    // resize_channel with resize_amount=+X, allocate_amount=+X:
+    // custody free → channel → unified (channel is a pass-through)
+    await this.channelManager.resizeChannel({
+      channelId,
+      chainId,
+      amount,
+      userAddress,
+      tokenAddress,
+      participants: [],
+    });
+
+    // Close the channel immediately. The resize credits unified balance but
+    // leaves on-chain allocation at [X, 0]. ClearNode blocks create_app_session
+    // while any channel has non-zero on-chain allocations.
+    try {
+      await this.channelManager.closeChannel(channelId, chainId, userAddress);
+      console.log(`[CustodyAdapter] Channel ${channelId} closed after deposit`);
+
+      // Give ClearNode a moment to index the close before session creation attempts.
+      await new Promise((r) => setTimeout(r, 3000));
+
+      // Verify whether any active channels still remain for this wallet.
+      try {
+        const remaining = await this.channelManager.getChannels(userAddress);
+        if (remaining.length > 0) {
+          console.warn(
+            `[CustodyAdapter] ${remaining.length} active channel(s) remain after close; ` +
+              `app session creation may still be blocked until indexing catches up`,
+          );
+        } else {
+          console.log(
+            `[CustodyAdapter] Channel close indexed: no active channels remain`,
+          );
+        }
+      } catch (verifyErr) {
+        console.warn(
+          `[CustodyAdapter] Could not verify channel close state after deposit:`,
+          verifyErr instanceof Error ? verifyErr.message : verifyErr,
+        );
+      }
+    } catch (closeErr) {
+      console.warn(
+        `[CustodyAdapter] Failed to close channel after deposit:`,
+        closeErr instanceof Error ? closeErr.message : closeErr,
+      );
+    }
+
+    return { channelId, credited: true };
+  }
+
+  /**
+   * Reverse resize: unified → channel → custody free.
+   *
+   * Finds an existing open channel and calls resize with negative amount.
+   * The channel must have been used for a prior deposit (custody has funds
+   * locked for it). Throws if no open channel is found.
+   */
+  async debitUnifiedBalanceToCustody(params: {
+    userId: string;
+    chain: string;
+    userAddress: string;
+    tokenAddress: string;
+    amount: bigint;
+  }): Promise<{ channelId: string; debited: boolean }> {
+    const { userId, chain, userAddress, tokenAddress, amount } = params;
+
+    const chainIdMap: Record<string, number> = {
+      ethereum: 1,
+      base: 8453,
+      arbitrum: 42161,
+      avalanche: 43114,
+    };
+    const chainId = chainIdMap[chain.toLowerCase()];
+    if (!chainId) {
+      throw new BadRequestException(`Unsupported chain: ${chain}`);
+    }
+
+    await this.yellowNetwork.authenticate(userId, userAddress);
+
     const existing = await this.channelManager.getChannels(userAddress);
     const open = existing.find(
       (ch) => ch.status === 'open' || ch.status === 'active',
@@ -487,20 +669,29 @@ export class CustodyContractAdapter implements ICustodyContractPort {
       }
     }
 
-    // Send resize_channel RPC to ClearNode so it credits the unified balance.
-    // SDKChannelService.resizeChannel() now skips the on-chain custody.resize()
-    // transaction when ClearNode returns zero allocations (handshake mode),
-    // preventing the custody fund consumption bug.
+    // Deallocation path: allocate(-X) moves unified → channel, then channel close releases to custody free.
+    // Keep resize at 0 to avoid "new channel amount must be positive" when channel starts at zero.
     await this.channelManager.resizeChannel({
       channelId,
       chainId,
-      amount,
+      amount: 0n,
       userAddress,
       tokenAddress,
       participants: [],
     });
 
-    return { channelId, credited: true };
+    // Close channel after reverse resize to keep on-chain allocations clean
+    try {
+      await this.channelManager.closeChannel(channelId, chainId, userAddress);
+      console.log(`[CustodyAdapter] Channel ${channelId} closed after withdrawal`);
+    } catch (closeErr) {
+      console.warn(
+        `[CustodyAdapter] Failed to close channel after withdrawal (non-critical):`,
+        closeErr instanceof Error ? closeErr.message : closeErr,
+      );
+    }
+
+    return { channelId, debited: true };
   }
 
   /**
