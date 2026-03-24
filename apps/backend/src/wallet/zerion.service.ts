@@ -199,23 +199,23 @@ export class ZerionService {
    */
   private normalizeZerionChainId(zerionChainId: string): string {
     const chainMapping: Record<string, string> = {
-      'eth': 'ethereum',
-      'ethereum': 'ethereum',
-      'base': 'base',
-      'arbitrum': 'arbitrum',
-      'optimism': 'optimism',
-      'polygon': 'polygon',
-      'matic': 'polygon',
-      'avalanche': 'avalanche',
-      'avax': 'avalanche',
-      'bnb': 'bnb',
-      'bsc': 'bnb',
-      'solana': 'solana',
-      'sol': 'solana',
-      'bitcoin': 'bitcoin',
-      'btc': 'bitcoin',
-      'tron': 'tron',
-      'trx': 'tron',
+      eth: 'ethereum',
+      ethereum: 'ethereum',
+      base: 'base',
+      arbitrum: 'arbitrum',
+      optimism: 'optimism',
+      polygon: 'polygon',
+      matic: 'polygon',
+      avalanche: 'avalanche',
+      avax: 'avalanche',
+      bnb: 'bnb',
+      bsc: 'bnb',
+      solana: 'solana',
+      sol: 'solana',
+      bitcoin: 'bitcoin',
+      btc: 'bitcoin',
+      tron: 'tron',
+      trx: 'tron',
     };
 
     return chainMapping[zerionChainId.toLowerCase()] || zerionChainId;
@@ -482,7 +482,9 @@ export class ZerionService {
     timeoutMs = 60000, // Increased from 30s to 60s for production
   ): Promise<T> {
     if (!this.apiKey || this.apiKey.trim() === '') {
-      throw new Error('Zerion API key not configured. Set ZERION_API_KEY environment variable.');
+      throw new Error(
+        'Zerion API key not configured. Set ZERION_API_KEY environment variable.',
+      );
     }
 
     // Zerion API authentication format

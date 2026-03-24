@@ -175,7 +175,9 @@ export interface IYellowNetworkPort {
    *
    * @param timeoutMs - Maximum wait in ms (default 30s). Rejects on timeout.
    */
-  waitForBalanceUpdate(timeoutMs?: number): Promise<Array<{ asset: string; amount: string }>>;
+  waitForBalanceUpdate(
+    timeoutMs?: number,
+  ): Promise<Array<{ asset: string; amount: string }>>;
 }
 
 /**

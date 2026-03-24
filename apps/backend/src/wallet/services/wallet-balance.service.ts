@@ -26,10 +26,7 @@ export class WalletBalanceService {
       balanceHuman?: string;
     }>
   > {
-    return this.zerionBalanceService.getTokenBalancesAny(
-      userId,
-      forceRefresh,
-    );
+    return this.zerionBalanceService.getTokenBalancesAny(userId, forceRefresh);
   }
 
   async *streamBalances(userId: string): AsyncGenerator<

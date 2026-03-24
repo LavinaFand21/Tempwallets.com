@@ -221,7 +221,6 @@ export class NitroliteClient {
         `[NitroliteClient] SDK ready on chain ${primaryNetwork.chain_id}`,
       );
     } else {
-
       this.channelService = new ChannelService(
         this.ws,
         this.auth,
@@ -555,10 +554,15 @@ export class NitroliteClient {
    * @param timeoutMs - Maximum wait time (default 30s). Rejects with Error on timeout.
    * @returns The raw balance_updates array from the notification.
    */
-  async waitForBalanceUpdate(timeoutMs = 30_000): Promise<Array<{ asset: string; amount: string }>> {
+  async waitForBalanceUpdate(
+    timeoutMs = 30_000,
+  ): Promise<Array<{ asset: string; amount: string }>> {
     this.ensureInitialized();
     const data = await this.ws.waitForNotification('bu', timeoutMs);
-    return (data?.balance_updates ?? []) as Array<{ asset: string; amount: string }>;
+    return (data?.balance_updates ?? []) as Array<{
+      asset: string;
+      amount: string;
+    }>;
   }
 
   /**

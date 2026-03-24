@@ -68,10 +68,18 @@ export class CloseChannelUseCase {
     // getChannels() filters out closed channels, so a pre-flight status check
     // can never detect a closed channel. Instead we attempt the close and catch
     // the specific ClearNode errors that mean "nothing left to close".
-    console.log(`[CloseChannel] Closing channel ${dto.channelId} on chain ${chainId}...`);
+    console.log(
+      `[CloseChannel] Closing channel ${dto.channelId} on chain ${chainId}...`,
+    );
     try {
-      await this.channelManager.closeChannel(dto.channelId, chainId, userAddress);
-      console.log(`[CloseChannel] Channel ${dto.channelId} closed successfully`);
+      await this.channelManager.closeChannel(
+        dto.channelId,
+        chainId,
+        userAddress,
+      );
+      console.log(
+        `[CloseChannel] Channel ${dto.channelId} closed successfully`,
+      );
     } catch (err: any) {
       const msg = (err?.message ?? '').toLowerCase();
       // ClearNode returns these when the channel is already closed or gone

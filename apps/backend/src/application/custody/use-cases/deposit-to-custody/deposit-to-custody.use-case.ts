@@ -138,9 +138,13 @@ export class DepositToCustodyUseCase {
     // We store the Promise here; await it AFTER the resize completes (step 7).
     const targetSymbol = dto.asset.toLowerCase();
     const targetToken = tokenAddress.toLowerCase();
-    const buPromise = this.yellowNetwork.waitForBalanceUpdate(30_000).catch(() => null);
+    const buPromise = this.yellowNetwork
+      .waitForBalanceUpdate(30_000)
+      .catch(() => null);
 
-    console.log(`\n--- Step 3: Crediting Unified Balance via resize_channel ---`);
+    console.log(
+      `\n--- Step 3: Crediting Unified Balance via resize_channel ---`,
+    );
     let creditedChannelId: string | undefined;
     let creditStepError: string | null = null;
     try {
@@ -184,7 +188,11 @@ export class DepositToCustodyUseCase {
           `[DepositToCustodyUseCase] bu notification received — unified balance: ${unifiedBalance}`,
         );
       } else {
-        throw new Error(entry ? 'bu showed 0 (channel-create event, not resize)' : 'asset not in bu payload');
+        throw new Error(
+          entry
+            ? 'bu showed 0 (channel-create event, not resize)'
+            : 'asset not in bu payload',
+        );
       }
     } catch (err: any) {
       // bu was either 0 (channel-create event fired before resize indexed) or timed out.
@@ -195,15 +203,20 @@ export class DepositToCustodyUseCase {
       );
       try {
         await new Promise((r) => setTimeout(r, 8_000));
-        const balances = await this.yellowNetwork.getUnifiedBalance(userAddress);
+        const balances =
+          await this.yellowNetwork.getUnifiedBalance(userAddress);
         const entry = balances.find((b) => {
           const a = (b.asset || '').toLowerCase();
           return a === targetSymbol || a === targetToken;
         });
         unifiedBalance = entry?.amount ?? '0';
-        console.log(`[DepositToCustodyUseCase] Post-resize balance query: unified=${unifiedBalance}`);
+        console.log(
+          `[DepositToCustodyUseCase] Post-resize balance query: unified=${unifiedBalance}`,
+        );
       } catch (queryErr: any) {
-        console.warn(`[DepositToCustodyUseCase] Fallback balance query failed: ${queryErr?.message}`);
+        console.warn(
+          `[DepositToCustodyUseCase] Fallback balance query failed: ${queryErr?.message}`,
+        );
       }
     }
 

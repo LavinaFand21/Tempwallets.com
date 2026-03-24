@@ -64,7 +64,8 @@ export class QuerySessionUseCase {
 
     // 5. Sync canonical session state to DB (participants + balances)
     const allocations = session.allocations ?? [];
-    const tokenFromYellow = allocations.find((a: any) => a.asset)?.asset ?? 'usdc';
+    const tokenFromYellow =
+      allocations.find((a: any) => a.asset)?.asset ?? 'usdc';
     const token = tokenFromYellow.toLowerCase();
     const walletLower = walletAddress.toLowerCase();
     const now = new Date();
@@ -125,8 +126,10 @@ export class QuerySessionUseCase {
             p.asset.toLowerCase() === token,
         );
         const currentStatus = existing?.status ?? 'invited';
-        const shouldJoin = addrLower === walletLower || currentStatus === 'joined';
-        const nextBalance = existing?.balance ?? allocationByKey.get(key) ?? '0';
+        const shouldJoin =
+          addrLower === walletLower || currentStatus === 'joined';
+        const nextBalance =
+          existing?.balance ?? allocationByKey.get(key) ?? '0';
 
         await tx.lightningNodeParticipant.upsert({
           where: {
@@ -145,7 +148,8 @@ export class QuerySessionUseCase {
           create: {
             lightningNodeId: node.id,
             address,
-            weight: session.definition?.weights?.[participants.indexOf(address)] ?? 0,
+            weight:
+              session.definition?.weights?.[participants.indexOf(address)] ?? 0,
             balance: nextBalance,
             asset: token,
             status: shouldJoin ? 'joined' : 'invited',
@@ -190,4 +194,3 @@ export class QuerySessionUseCase {
     };
   }
 }
-

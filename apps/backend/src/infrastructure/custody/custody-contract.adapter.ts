@@ -17,7 +17,13 @@
 
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createPublicClient, createWalletClient, http, Address, encodeFunctionData } from 'viem';
+import {
+  createPublicClient,
+  createWalletClient,
+  http,
+  Address,
+  encodeFunctionData,
+} from 'viem';
 import { base, arbitrum } from 'viem/chains';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { IYellowNetworkPort } from '../../application/app-session/ports/yellow-network.port.js';
@@ -116,7 +122,9 @@ export class CustodyContractAdapter implements ICustodyContractPort {
       blockTag: 'pending',
     });
 
-    console.log(`Approving ${amount} tokens for custody contract (nonce: ${nonce})...`);
+    console.log(
+      `Approving ${amount} tokens for custody contract (nonce: ${nonce})...`,
+    );
 
     const custodyAddress = this.getCustodyAddress(chainId);
 
@@ -172,7 +180,9 @@ export class CustodyContractAdapter implements ICustodyContractPort {
       blockTag: 'pending',
     });
 
-    console.log(`Depositing ${amount} tokens to custody contract (nonce: ${nonce})...`);
+    console.log(
+      `Depositing ${amount} tokens to custody contract (nonce: ${nonce})...`,
+    );
 
     const custodyAddress = this.getCustodyAddress(chainId);
 
@@ -180,11 +190,7 @@ export class CustodyContractAdapter implements ICustodyContractPort {
       address: custodyAddress,
       abi: CUSTODY_ABI,
       functionName: 'deposit',
-      args: [
-        userAddress as Address,
-        tokenAddress as Address,
-        amount,
-      ],
+      args: [userAddress as Address, tokenAddress as Address, amount],
       nonce,
     });
 
@@ -235,27 +241,31 @@ export class CustodyContractAdapter implements ICustodyContractPort {
     const [ethBalance, gasPrice, approveGas, depositGas] = await Promise.all([
       publicClient.getBalance({ address: account.address }),
       publicClient.getGasPrice(),
-      publicClient.estimateGas({
-        account,
-        to: tokenAddress as Address,
-        data: encodeFunctionData({
-          abi: ERC20_ABI,
-          functionName: 'approve',
-          args: [custodyAddress, amount],
-        }),
-      }).catch(() => 60_000n),
-      publicClient.estimateGas({
-        account,
-        to: custodyAddress,
-        data: encodeFunctionData({
-          abi: CUSTODY_ABI,
-          functionName: 'deposit',
-          args: [account.address as Address, tokenAddress as Address, amount],
-        }),
-      }).catch(() => 100_000n),
+      publicClient
+        .estimateGas({
+          account,
+          to: tokenAddress as Address,
+          data: encodeFunctionData({
+            abi: ERC20_ABI,
+            functionName: 'approve',
+            args: [custodyAddress, amount],
+          }),
+        })
+        .catch(() => 60_000n),
+      publicClient
+        .estimateGas({
+          account,
+          to: custodyAddress,
+          data: encodeFunctionData({
+            abi: CUSTODY_ABI,
+            functionName: 'deposit',
+            args: [account.address, tokenAddress as Address, amount],
+          }),
+        })
+        .catch(() => 100_000n),
     ]);
 
-    const totalGasCost = (approveGas + depositGas) * gasPrice * 120n / 100n;
+    const totalGasCost = ((approveGas + depositGas) * gasPrice * 120n) / 100n;
     if (ethBalance < totalGasCost) {
       const haveEth = (Number(ethBalance) / 1e18).toFixed(6);
       const needEth = (Number(totalGasCost) / 1e18).toFixed(6);
@@ -280,11 +290,7 @@ export class CustodyContractAdapter implements ICustodyContractPort {
       address: custodyAddress,
       abi: CUSTODY_ABI,
       functionName: 'deposit',
-      args: [
-        userAddress as Address,
-        tokenAddress as Address,
-        amount,
-      ],
+      args: [userAddress as Address, tokenAddress as Address, amount],
       nonce: depositNonce,
     });
     console.log(`✅ Deposit submitted: deposit tx=${depositHash}`);
@@ -292,7 +298,9 @@ export class CustodyContractAdapter implements ICustodyContractPort {
     // Wait for both transactions to be confirmed (in order)
     await publicClient.waitForTransactionReceipt({ hash: approveHash });
 
-    const depositReceipt = await publicClient.waitForTransactionReceipt({ hash: depositHash });
+    const depositReceipt = await publicClient.waitForTransactionReceipt({
+      hash: depositHash,
+    });
     console.log(`✅ Deposit confirmed block=${depositReceipt.blockNumber}`);
 
     return { approveTxHash: approveHash, depositTxHash: depositHash };
@@ -379,12 +387,20 @@ export class CustodyContractAdapter implements ICustodyContractPort {
           // Remove selector (10 chars = 0x + 8 hex), each uint256 is 64 hex
           const availHex = data.slice(10, 74);
           const reqHex = data.slice(74, 138);
-          if (availHex) availHuman = (parseInt(availHex, 16) / 10 ** decimals).toFixed(decimals);
-          if (reqHex) reqHuman = (parseInt(reqHex, 16) / 10 ** decimals).toFixed(decimals);
-        } catch { /* use defaults */ }
+          if (availHex)
+            availHuman = (parseInt(availHex, 16) / 10 ** decimals).toFixed(
+              decimals,
+            );
+          if (reqHex)
+            reqHuman = (parseInt(reqHex, 16) / 10 ** decimals).toFixed(
+              decimals,
+            );
+        } catch {
+          /* use defaults */
+        }
         throw new BadRequestException(
           `Insufficient custody balance. Available: ${availHuman}, requested: ${reqHuman}. ` +
-          `You can only withdraw funds that are in the custody contract (not locked in channels).`,
+            `You can only withdraw funds that are in the custody contract (not locked in channels).`,
         );
       }
       // Re-throw other errors with a cleaner message
@@ -392,7 +408,7 @@ export class CustodyContractAdapter implements ICustodyContractPort {
       if (msg.includes('revert')) {
         throw new BadRequestException(
           `Custody withdraw reverted on-chain. Ensure you have sufficient available balance. ` +
-          `Close any open channels first to unlock funds.`,
+            `Close any open channels first to unlock funds.`,
         );
       }
       throw err;
@@ -430,7 +446,9 @@ export class CustodyContractAdapter implements ICustodyContractPort {
     // result is uint256[][] — result[0][0] is the balance (raw, 6 decimals for USDC)
     const rawBalance: bigint = (result as bigint[][])[0]?.[0] ?? BigInt(0);
     const decimals = 6;
-    const humanBalance = (Number(rawBalance) / Math.pow(10, decimals)).toFixed(decimals);
+    const humanBalance = (Number(rawBalance) / Math.pow(10, decimals)).toFixed(
+      decimals,
+    );
 
     return humanBalance;
   }
@@ -501,8 +519,14 @@ export class CustodyContractAdapter implements ICustodyContractPort {
     for (const ch of existing) {
       if (ch.status === 'open' || ch.status === 'active') {
         try {
-          console.log(`[CustodyAdapter] Closing stale channel ${ch.channelId}...`);
-          await this.channelManager.closeChannel(ch.channelId, chainId, userAddress);
+          console.log(
+            `[CustodyAdapter] Closing stale channel ${ch.channelId}...`,
+          );
+          await this.channelManager.closeChannel(
+            ch.channelId,
+            chainId,
+            userAddress,
+          );
           console.log(`[CustodyAdapter] Stale channel ${ch.channelId} closed`);
         } catch (closeErr) {
           console.warn(
@@ -537,7 +561,9 @@ export class CustodyContractAdapter implements ICustodyContractPort {
 
         const existingChannelId = match[1];
         const channels = await this.channelManager.getChannels(userAddress);
-        const existing = channels.find((ch) => ch.channelId === existingChannelId);
+        const existing = channels.find(
+          (ch) => ch.channelId === existingChannelId,
+        );
         const status = (existing?.status || '').toLowerCase();
         const isUsable = status === 'open' || status === 'active';
 
@@ -563,7 +589,9 @@ export class CustodyContractAdapter implements ICustodyContractPort {
     if (!channelId) {
       throw (
         lastCreateError ??
-        new BadRequestException('Failed to create a usable channel for deposit.')
+        new BadRequestException(
+          'Failed to create a usable channel for deposit.',
+        )
       );
     }
 
@@ -669,12 +697,12 @@ export class CustodyContractAdapter implements ICustodyContractPort {
       }
     }
 
-    // Deallocation path: allocate(-X) moves unified → channel, then channel close releases to custody free.
-    // Keep resize at 0 to avoid "new channel amount must be positive" when channel starts at zero.
+    // Reverse path: pass negative resize amount so SDK computes allocate_amount=+X.
+    // This moves funds from unified back toward custody free before on-chain withdraw.
     await this.channelManager.resizeChannel({
       channelId,
       chainId,
-      amount: 0n,
+      amount: -amount,
       userAddress,
       tokenAddress,
       participants: [],
@@ -683,7 +711,9 @@ export class CustodyContractAdapter implements ICustodyContractPort {
     // Close channel after reverse resize to keep on-chain allocations clean
     try {
       await this.channelManager.closeChannel(channelId, chainId, userAddress);
-      console.log(`[CustodyAdapter] Channel ${channelId} closed after withdrawal`);
+      console.log(
+        `[CustodyAdapter] Channel ${channelId} closed after withdrawal`,
+      );
     } catch (closeErr) {
       console.warn(
         `[CustodyAdapter] Failed to close channel after withdrawal (non-critical):`,

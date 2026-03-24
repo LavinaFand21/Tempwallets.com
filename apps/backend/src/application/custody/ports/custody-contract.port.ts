@@ -47,7 +47,9 @@ export interface ICustodyContractPort {
    *
    * Returns { approveTxHash, depositTxHash }
    */
-  approveAndDeposit(params: DepositParams): Promise<{ approveTxHash: string; depositTxHash: string }>;
+  approveAndDeposit(
+    params: DepositParams,
+  ): Promise<{ approveTxHash: string; depositTxHash: string }>;
 
   /**
    * Withdraw funds from custody contract back to wallet

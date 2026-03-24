@@ -76,15 +76,18 @@ export class DiscoverSessionsUseCase {
         const detail = detailById.get(s.app_session_id) ?? s;
         const allocations = (detail as any).allocations ?? s.allocations ?? [];
 
-        const tokenFromYellow = (allocations as any[]).find((a: any) => a.asset)?.asset ?? 'usdc';
+        const tokenFromYellow =
+          (allocations as any[]).find((a: any) => a.asset)?.asset ?? 'usdc';
         const token = tokenFromYellow.toLowerCase();
 
-        const participantList: string[] =
-          (detail as any).definition?.participants?.length
-            ? (detail as any).definition.participants
-            : s.definition?.participants?.length
-              ? s.definition.participants
-              : (allocations as any[]).map((a: any) => a.participant).filter(Boolean);
+        const participantList: string[] = (detail as any).definition
+          ?.participants?.length
+          ? (detail as any).definition.participants
+          : s.definition?.participants?.length
+            ? s.definition.participants
+            : (allocations as any[])
+                .map((a: any) => a.participant)
+                .filter(Boolean);
 
         const existingNode = await this.prisma.lightningNode.findUnique({
           where: { appSessionId: s.app_session_id },
@@ -142,7 +145,8 @@ export class DiscoverSessionsUseCase {
                 p.asset.toLowerCase() === token,
             );
             const currentStatus = existing?.status ?? 'invited';
-            const nextBalance = existing?.balance ?? allocationByKey.get(key) ?? '0';
+            const nextBalance =
+              existing?.balance ?? allocationByKey.get(key) ?? '0';
 
             await tx.lightningNodeParticipant.upsert({
               where: {
@@ -160,7 +164,10 @@ export class DiscoverSessionsUseCase {
               create: {
                 lightningNodeId: node.id,
                 address,
-                weight: detail.definition?.weights?.[participantList.indexOf(address)] ?? 0,
+                weight:
+                  detail.definition?.weights?.[
+                    participantList.indexOf(address)
+                  ] ?? 0,
                 balance: nextBalance,
                 asset: token,
                 status: currentStatus,
@@ -210,4 +217,3 @@ export class DiscoverSessionsUseCase {
     };
   }
 }
-

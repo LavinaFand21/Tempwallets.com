@@ -35,11 +35,7 @@ export interface WalletAddresses {
 
 export type WalletAddressKey = keyof WalletAddresses;
 
-export type WalletAddressKind =
-  | 'eoa'
-  | 'erc4337'
-  | 'nonEvm'
-  | 'substrate';
+export type WalletAddressKind = 'eoa' | 'erc4337' | 'nonEvm' | 'substrate';
 
 export interface WalletAddressMetadata {
   chain: WalletAddressKey;
@@ -66,11 +62,7 @@ export interface SmartAccountSummary {
     | null;
   address: string | null;
   chains: Record<
-    | 'ethereum'
-    | 'base'
-    | 'arbitrum'
-    | 'polygon'
-    | 'avalanche',
+    'ethereum' | 'base' | 'arbitrum' | 'polygon' | 'avalanche',
     string | null
   >;
 }

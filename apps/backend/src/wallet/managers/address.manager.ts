@@ -49,8 +49,6 @@ export class AddressManager implements IAddressManager {
     'bifrostTestnet',
   ];
 
- 
-
   constructor(
     private seedManager: SeedManager,
     private accountFactory: AccountFactory,
@@ -109,7 +107,10 @@ export class AddressManager implements IAddressManager {
             cachedAddresses['ethereum'] ??
             cachedAddresses['arbitrum'] ??
             cachedAddresses['polygon'];
-          if (cachedBase && cachedBase.toLowerCase() !== derived.toLowerCase()) {
+          if (
+            cachedBase &&
+            cachedBase.toLowerCase() !== derived.toLowerCase()
+          ) {
             this.logger.warn(
               `Cached addresses are out of sync with seed for user ${userId}. ` +
                 `Clearing cache and regenerating.`,
@@ -217,7 +218,7 @@ export class AddressManager implements IAddressManager {
             ? await account.getAddress()
             : account.address;
 
-        addresses[chain] = address as any;
+        addresses[chain] = address;
         addressesToSave[chain] = address as string;
         await this.addressCacheRepository.saveAddress(userId, chain, address);
       } catch (error) {
@@ -435,27 +436,26 @@ export class AddressManager implements IAddressManager {
   }
 
   private buildMetadata(addresses: WalletAddresses): WalletAddressMetadataMap {
-  const metadata = {} as WalletAddressMetadataMap;
+    const metadata = {} as WalletAddressMetadataMap;
 
-  const assign = (
-    chain: WalletAddressKey,
-    kind: WalletAddressKind,
-    visible: boolean,
-  ) => {
-    metadata[chain] = {
-      chain,
-      address: addresses[chain],
-      kind,
-      visible,
-      label: this.getLabelForChain(chain, kind),
+    const assign = (
+      chain: WalletAddressKey,
+      kind: WalletAddressKind,
+      visible: boolean,
+    ) => {
+      metadata[chain] = {
+        chain,
+        address: addresses[chain],
+        kind,
+        visible,
+        label: this.getLabelForChain(chain, kind),
+      };
     };
-  };
 
-  this.eoaChains.forEach((chain) => assign(chain, 'eoa', true));
+    this.eoaChains.forEach((chain) => assign(chain, 'eoa', true));
 
-  return metadata;
-}
-
+    return metadata;
+  }
 
   private getLabelForChain(
     chain: WalletAddressKey,

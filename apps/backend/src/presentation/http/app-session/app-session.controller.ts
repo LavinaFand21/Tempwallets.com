@@ -170,14 +170,26 @@ export class AppSessionController {
     @Query('userId') userId: string,
     @Query('chain') chain: string,
   ) {
-    // Authenticate
-    await this.authenticateWalletUseCase.execute({
+    // Build balances from canonical session allocations to avoid divergence
+    // with transient/stale ledger snapshots from get_ledger_balances.
+    const session = await this.querySessionUseCase.execute({
       userId,
+      sessionId,
       chain,
     });
 
-    // Get balances for the app session
-    const balances = await this.yellowNetwork.getAppSessionBalances(sessionId);
+    const sumsByAsset = new Map<string, number>();
+    for (const alloc of session.allocations ?? []) {
+      const asset = String(alloc.asset ?? session.token ?? 'usdc').toLowerCase();
+      const next = (sumsByAsset.get(asset) ?? 0) + Number.parseFloat(String(alloc.amount ?? '0'));
+      sumsByAsset.set(asset, Number.isFinite(next) ? next : 0);
+    }
+    const balances = [...sumsByAsset.entries()].map(([asset, amount]) => ({
+      asset,
+      amount: amount.toFixed(6),
+      locked: '0',
+      available: amount.toFixed(6),
+    }));
 
     return {
       ok: true,

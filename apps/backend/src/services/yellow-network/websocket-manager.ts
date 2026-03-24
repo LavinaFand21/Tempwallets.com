@@ -82,7 +82,8 @@ export class WebSocketManager {
   private eventHandlers: WSEventHandlers = {};
 
   // One-shot notification listeners keyed by method ('bu', 'cu', 'tr', 'asu')
-  private notificationListeners: Map<string, NotificationListener[]> = new Map();
+  private notificationListeners: Map<string, NotificationListener[]> =
+    new Map();
 
   constructor(config: WebSocketConfig) {
     this.url = config.url;
@@ -337,7 +338,11 @@ export class WebSocketManager {
         const listeners = this.notificationListeners.get(method) ?? [];
         const idx = listeners.indexOf(listener);
         if (idx !== -1) listeners.splice(idx, 1);
-        reject(new Error(`Timed out waiting for '${method}' notification after ${timeoutMs}ms`));
+        reject(
+          new Error(
+            `Timed out waiting for '${method}' notification after ${timeoutMs}ms`,
+          ),
+        );
       }, timeoutMs);
 
       const listener: NotificationListener = (data) => {
@@ -493,8 +498,16 @@ export class WebSocketManager {
         if (handler) {
           this.responseHandlers.delete(requestId);
           handler({
-            res: [requestId, 'error', { error: 'Connection lost — please retry after re-authentication' }],
-            error: { message: 'Connection lost — please retry after re-authentication' },
+            res: [
+              requestId,
+              'error',
+              {
+                error: 'Connection lost — please retry after re-authentication',
+              },
+            ],
+            error: {
+              message: 'Connection lost — please retry after re-authentication',
+            },
           } as any);
         }
         this.logger.debug(`Rejected stale RPC [${requestId}] ${method}`);

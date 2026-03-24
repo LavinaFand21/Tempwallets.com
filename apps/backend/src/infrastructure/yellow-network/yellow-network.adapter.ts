@@ -55,7 +55,11 @@ export class YellowNetworkAdapter
   private currentClient: NitroliteClient | null = null;
   private currentWallet: string | null = null;
   /** Serialises concurrent authenticate() calls to prevent WebSocket storms */
-  private authInFlight: Promise<{ sessionId: string; expiresAt: number; authSignature: string }> | null = null;
+  private authInFlight: Promise<{
+    sessionId: string;
+    expiresAt: number;
+    authSignature: string;
+  }> | null = null;
 
   /**
    * Tracks per-participant allocations for each app session.
@@ -117,9 +121,11 @@ export class YellowNetworkAdapter
       return this.authInFlight;
     }
 
-    this.authInFlight = this._doAuthenticate(userId, walletAddress).finally(() => {
-      this.authInFlight = null;
-    });
+    this.authInFlight = this._doAuthenticate(userId, walletAddress).finally(
+      () => {
+        this.authInFlight = null;
+      },
+    );
 
     return this.authInFlight;
   }
@@ -157,7 +163,9 @@ export class YellowNetworkAdapter
     if (this.currentClient) {
       try {
         this.currentClient.disconnect();
-      } catch { /* ignore — already disconnected */ }
+      } catch {
+        /* ignore — already disconnected */
+      }
       this.currentClient = null;
       this.currentWallet = null;
     }
@@ -470,7 +478,9 @@ export class YellowNetworkAdapter
   /**
    * Wait for the next `bu` push notification from ClearNode.
    */
-  async waitForBalanceUpdate(timeoutMs = 30_000): Promise<Array<{ asset: string; amount: string }>> {
+  async waitForBalanceUpdate(
+    timeoutMs = 30_000,
+  ): Promise<Array<{ asset: string; amount: string }>> {
     if (!this.currentClient) {
       throw new BadRequestException('Not authenticated with Yellow Network');
     }

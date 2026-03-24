@@ -62,30 +62,90 @@ export class UpdateAllocationUseCase {
     const walletLower = walletAddress.toLowerCase();
 
     // Guard: prevent negative balances in requested allocations
-    if (dto.allocations?.some((a) => Number(a.amount) < 0 || Number.isNaN(Number(a.amount)))) {
+    if (
+      dto.allocations?.some(
+        (a) => Number(a.amount) < 0 || Number.isNaN(Number(a.amount)),
+      )
+    ) {
       throw new BadRequestException('Negative balances are not allowed');
     }
 
     // Guard: require two participants before transfers (OPERATE)
+    let requestAllocations = dto.allocations ?? [];
+
     if (dto.intent === 'OPERATE') {
       const participantCount =
         existingNode?.participants.length ??
         currentSession.definition?.participants?.length ??
         0;
       if (participantCount < 2) {
-        throw new BadRequestException('Session must have at least 2 participants');
-      }
-
-      const joinedCount =
-        existingNode?.participants.filter(
-          (p) => p.status === 'joined' || p.address.toLowerCase() === walletLower,
-        ).length ?? 0;
-
-      if (joinedCount < 2) {
         throw new BadRequestException(
-          'Counterparty has not joined yet. Transfers require all participants to have joined the session.',
+          'Session must have at least 2 participants',
         );
       }
+
+      // In Judge-governed sessions, transfer authority is determined by quorum/weights.
+      // Participant "joined" metadata can lag local DB and should not block OPERATE.
+
+      // Normalize OPERATE payload against current session and enforce zero-sum.
+      // This prevents stale/missing client allocations from causing sum-delta failures.
+      const tokenForOperate =
+        requestAllocations.find((a) => a.asset)?.asset ??
+        (currentSession.allocations ?? []).find((a: any) => a.asset)?.asset ??
+        existingNode?.token ??
+        'usdc';
+      const operateToken = tokenForOperate.toLowerCase();
+
+      const operateParticipantSet = new Set<string>();
+      for (const addr of currentSession.definition?.participants ?? []) {
+        operateParticipantSet.add(addr);
+      }
+      for (const addr of existingNode?.participants.map((p) => p.address) ?? []) {
+        operateParticipantSet.add(addr);
+      }
+      for (const alloc of requestAllocations) {
+        if (alloc.participant) operateParticipantSet.add(alloc.participant);
+      }
+      const operateParticipants = [...operateParticipantSet];
+
+      const currentByKey = new Map(
+        (currentSession.allocations ?? []).map((a: any) => [
+          `${String(a.participant).toLowerCase()}|${String(a.asset ?? operateToken).toLowerCase()}`,
+          Number.parseFloat(String(a.amount ?? '0')) || 0,
+        ]),
+      );
+      const requestedByKey = new Map(currentByKey);
+      for (const alloc of requestAllocations) {
+        const key = `${String(alloc.participant).toLowerCase()}|${String(alloc.asset ?? operateToken).toLowerCase()}`;
+        requestedByKey.set(
+          key,
+          Number.parseFloat(String(alloc.amount ?? '0')) || 0,
+        );
+      }
+
+      const totalCurrent = operateParticipants.reduce((sum, addr) => {
+        const key = `${addr.toLowerCase()}|${operateToken}`;
+        return sum + (currentByKey.get(key) ?? 0);
+      }, 0);
+      const totalRequested = operateParticipants.reduce((sum, addr) => {
+        const key = `${addr.toLowerCase()}|${operateToken}`;
+        return sum + (requestedByKey.get(key) ?? 0);
+      }, 0);
+      if (Math.abs(totalRequested - totalCurrent) > 1e-9) {
+        throw new BadRequestException(
+          'OPERATE allocations must sum exactly to the current session total',
+        );
+      }
+
+      requestAllocations = operateParticipants.map((participant) => {
+        const key = `${participant.toLowerCase()}|${operateToken}`;
+        const amount = requestedByKey.get(key) ?? 0;
+        return {
+          participant,
+          asset: operateToken,
+          amount: amount.toFixed(6),
+        };
+      });
     }
 
     if (dto.intent === 'OPERATE') {
@@ -104,39 +164,46 @@ export class UpdateAllocationUseCase {
     const updated = await this.yellowNetwork.updateSession({
       sessionId: dto.appSessionId,
       intent: dto.intent,
-      allocations: dto.allocations,
+      allocations: requestAllocations,
     });
 
     // 5. Persist latest balances in local DB for deterministic totals
     const tokenFromUpdated =
-      (updated.allocations ?? currentSession.allocations ?? []).find((a: any) => a.asset)?.asset ??
+      (updated.allocations ?? currentSession.allocations ?? []).find(
+        (a: any) => a.asset,
+      )?.asset ??
       existingNode?.token ??
       'usdc';
     const token = tokenFromUpdated.toLowerCase();
 
-    const participantList =
-      updated.definition?.participants?.length
-        ? updated.definition.participants
-        : currentSession.definition?.participants?.length
-          ? currentSession.definition.participants
-          : existingNode?.participants.map((p) => p.address) ?? [];
+    const participantSet = new Set<string>();
+    for (const addr of updated.definition?.participants ?? []) participantSet.add(addr);
+    for (const addr of currentSession.definition?.participants ?? []) participantSet.add(addr);
+    for (const addr of existingNode?.participants.map((p) => p.address) ?? []) {
+      participantSet.add(addr);
+    }
+    for (const alloc of requestAllocations) {
+      if (alloc.participant) participantSet.add(alloc.participant);
+    }
+    const participantList = [...participantSet];
 
-    // Yellow can return partial allocations for OPERATE. Build a canonical map
-    // by layering: current session -> requested allocations -> confirmed update.
-    // This preserves zero-sum target amounts even when Yellow omits one side.
+    // Yellow can return partial/stale allocations immediately after submit.
+    // Build canonical map by layering current -> Yellow -> requested payload.
+    // For OPERATE, requested payload is the intended final zero-sum state and
+    // must win to avoid dropping counterparty credits during reconciliation.
     const allocationByKey = new Map(
       (currentSession.allocations ?? []).map((a: any) => [
         `${String(a.participant).toLowerCase()}|${String(a.asset ?? token).toLowerCase()}`,
         a.amount ?? '0',
       ]),
     );
-    for (const alloc of dto.allocations ?? []) {
+    for (const alloc of updated.allocations ?? []) {
       allocationByKey.set(
         `${String(alloc.participant).toLowerCase()}|${String(alloc.asset ?? token).toLowerCase()}`,
         alloc.amount ?? '0',
       );
     }
-    for (const alloc of updated.allocations ?? []) {
+    for (const alloc of requestAllocations) {
       allocationByKey.set(
         `${String(alloc.participant).toLowerCase()}|${String(alloc.asset ?? token).toLowerCase()}`,
         alloc.amount ?? '0',
@@ -162,9 +229,18 @@ export class UpdateAllocationUseCase {
           token,
           status: updated.status,
           maxParticipants: participantList.length || 2,
-          quorum: updated.definition?.quorum ?? currentSession.definition?.quorum ?? 100,
-          protocol: updated.definition?.protocol ?? currentSession.definition?.protocol ?? 'NitroRPC/0.4',
-          challenge: updated.definition?.challenge ?? currentSession.definition?.challenge ?? 3600,
+          quorum:
+            updated.definition?.quorum ??
+            currentSession.definition?.quorum ??
+            100,
+          protocol:
+            updated.definition?.protocol ??
+            currentSession.definition?.protocol ??
+            'NitroRPC/0.4',
+          challenge:
+            updated.definition?.challenge ??
+            currentSession.definition?.challenge ??
+            3600,
           sessionData:
             typeof updated.session_data === 'string'
               ? updated.session_data
@@ -181,8 +257,10 @@ export class UpdateAllocationUseCase {
             p.asset.toLowerCase() === token,
         );
         const currentStatus = existing?.status ?? 'invited';
-        const shouldJoin = addrLower === walletLower || currentStatus === 'joined';
-        const nextBalance = allocationByKey.get(key) ?? existing?.balance ?? '0';
+        const shouldJoin =
+          addrLower === walletLower || currentStatus === 'joined';
+        const nextBalance =
+          allocationByKey.get(key) ?? existing?.balance ?? '0';
 
         await tx.lightningNodeParticipant.upsert({
           where: {
@@ -201,7 +279,9 @@ export class UpdateAllocationUseCase {
           create: {
             lightningNodeId: node.id,
             address,
-            weight: updated.definition?.weights?.[participantList.indexOf(address)] ?? 0,
+            weight:
+              updated.definition?.weights?.[participantList.indexOf(address)] ??
+              0,
             balance: nextBalance,
             asset: token,
             status: shouldJoin ? 'joined' : 'invited',
@@ -267,4 +347,3 @@ export class UpdateAllocationUseCase {
     };
   }
 }
-

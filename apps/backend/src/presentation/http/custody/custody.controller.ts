@@ -170,13 +170,17 @@ export class CustodyController {
     };
 
     const chainId = chainIdMap[chain.toLowerCase()];
-    const tokenAddress = tokenAddressMap[chain.toLowerCase()]?.[asset.toLowerCase()];
+    const tokenAddress =
+      tokenAddressMap[chain.toLowerCase()]?.[asset.toLowerCase()];
 
     if (!chainId || !tokenAddress) {
       return { ok: false, error: `Unsupported chain/asset: ${chain}/${asset}` };
     }
 
-    const walletAddress = await this.walletProvider.getWalletAddress(userId, chain);
+    const walletAddress = await this.walletProvider.getWalletAddress(
+      userId,
+      chain,
+    );
     const balance = await this.custodyContract.getAvailableBalance(
       walletAddress,
       tokenAddress,
@@ -190,7 +194,8 @@ export class CustodyController {
         chain,
         asset: asset.toLowerCase(),
         availableBalance: balance,
-        description: 'On-chain custody contract balance (not locked in any channel)',
+        description:
+          'On-chain custody contract balance (not locked in any channel)',
       },
     };
   }

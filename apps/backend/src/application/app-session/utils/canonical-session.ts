@@ -61,10 +61,16 @@ export function mergeSessionState(params: {
   );
 
   const addressSet = new Set<string>();
-  (yellow.definition?.participants ?? []).forEach((addr) => addressSet.add(addr));
+  (yellow.definition?.participants ?? []).forEach((addr) =>
+    addressSet.add(addr),
+  );
   dbParticipants.forEach((p) => addressSet.add(p.address));
 
-  const allocations: Array<{ participant: string; asset: string; amount: string }> = [];
+  const allocations: Array<{
+    participant: string;
+    asset: string;
+    amount: string;
+  }> = [];
   const participants: CanonicalParticipant[] = [];
 
   for (const address of addressSet) {
@@ -76,7 +82,12 @@ export function mergeSessionState(params: {
       .filter((a) => String(a.participant).toLowerCase() === addrLower)
       .map((a) => normalizeAsset(a.asset, token));
 
-    const assets = dbAssets.length > 0 ? dbAssets : yellowAssets.length > 0 ? yellowAssets : [token];
+    const assets =
+      dbAssets.length > 0
+        ? dbAssets
+        : yellowAssets.length > 0
+          ? yellowAssets
+          : [token];
     const uniqueAssets = [...new Set(assets)];
 
     for (const asset of uniqueAssets) {

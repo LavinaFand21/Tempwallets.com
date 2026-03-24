@@ -109,10 +109,7 @@ export class CloseSessionUseCase {
     console.log(`[CloseSession] Session drained successfully`);
 
     // 7. Close session with Yellow Network (all allocations are now 0)
-    await this.yellowNetwork.closeSession(
-      dto.appSessionId,
-      zeroAllocations,
-    );
+    await this.yellowNetwork.closeSession(dto.appSessionId, zeroAllocations);
 
     // 8. Return result
     return {

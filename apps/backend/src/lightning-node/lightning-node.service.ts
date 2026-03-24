@@ -1603,7 +1603,7 @@ export class LightningNodeService {
 
     // If depositor is NOT the creator, we need the depositor's signature too
     let extraSignatures: string[] | undefined;
-    const depositorAddress = (dto.participantAddress as string).toLowerCase();
+    const depositorAddress = dto.participantAddress.toLowerCase();
     const isCreatorDeposit = depositorAddress === creatorAddress.toLowerCase();
 
     if (!isCreatorDeposit) {

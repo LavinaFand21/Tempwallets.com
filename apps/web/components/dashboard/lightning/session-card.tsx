@@ -23,7 +23,7 @@ export function SessionCard({
 }: SessionCardProps) {
   const total = (session.allocations ?? [])
     .reduce((s, a) => s + parseFloat(a.amount || '0'), 0)
-    .toFixed(3);
+    .toFixed(6);
 
   const participantEntries = session.participants ?? [];
   const fromAllocations = (session.allocations ?? []).map((a) => a.participant).filter(Boolean);

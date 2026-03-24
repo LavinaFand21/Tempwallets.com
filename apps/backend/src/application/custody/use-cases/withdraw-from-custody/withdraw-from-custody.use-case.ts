@@ -153,7 +153,9 @@ export class WithdrawFromCustodyUseCase {
         );
       }
     } else {
-      console.log(`[WithdrawUseCase] Custody free sufficient, skipping reverse resize`);
+      console.log(
+        `[WithdrawUseCase] Custody free sufficient, skipping reverse resize`,
+      );
     }
 
     // 5. Withdraw from custody contract to wallet (ON-CHAIN)
@@ -170,8 +172,7 @@ export class WithdrawFromCustodyUseCase {
     let unifiedBalance = '0';
     try {
       await this.yellowNetwork.authenticate(dto.userId, userAddress);
-      const balances =
-        await this.yellowNetwork.getUnifiedBalance(userAddress);
+      const balances = await this.yellowNetwork.getUnifiedBalance(userAddress);
       const targetSymbol = dto.asset.toLowerCase();
       const targetToken = tokenAddress.toLowerCase();
 
@@ -201,8 +202,7 @@ export class WithdrawFromCustodyUseCase {
       amount: amountInSmallestUnits.toString(),
       asset: dto.asset,
       unifiedBalance,
-      message:
-        `Successfully withdrew ${dto.amount} ${dto.asset} from unified balance to wallet ${userAddress}.`,
+      message: `Successfully withdrew ${dto.amount} ${dto.asset} from unified balance to wallet ${userAddress}.`,
     };
   }
 }

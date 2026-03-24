@@ -167,10 +167,11 @@ export class WalletSendService {
                 `Trying RPC decimals() call as final fallback.`,
             );
 
-            const rpcDecimals = await this.walletBalanceService.fetchDecimalsFromRPC(
-              tokenAddress,
-              account,
-            );
+            const rpcDecimals =
+              await this.walletBalanceService.fetchDecimalsFromRPC(
+                tokenAddress,
+                account,
+              );
             if (rpcDecimals !== null && rpcDecimals >= 0 && rpcDecimals <= 36) {
               finalDecimals = rpcDecimals;
               decimalsSource = 'rpc-decimals()';

@@ -45,7 +45,9 @@ function toFixedPoint(value: string): bigint {
   const negative = trimmed.startsWith('-');
   const abs = negative ? trimmed.slice(1) : trimmed;
   const [intPart = '0', decPart = ''] = abs.split('.');
-  const padded = decPart.padEnd(DECIMAL_PRECISION, '0').slice(0, DECIMAL_PRECISION);
+  const padded = decPart
+    .padEnd(DECIMAL_PRECISION, '0')
+    .slice(0, DECIMAL_PRECISION);
   const result = BigInt(intPart + padded);
   return negative ? -result : result;
 }
@@ -145,7 +147,7 @@ export class AppSessionService {
       const errorData = response.res[2];
       const errorMsg =
         typeof errorData === 'object' && errorData !== null
-          ? (errorData as any).error || JSON.stringify(errorData)
+          ? errorData.error || JSON.stringify(errorData)
           : String(errorData);
       console.error('[AppSessionService] create_app_session FAILED:', errorMsg);
       throw new Error(`create_app_session failed: ${errorMsg}`);
@@ -281,12 +283,9 @@ export class AppSessionService {
       const errorData = response.res[2];
       const errorMsg =
         typeof errorData === 'object' && errorData !== null
-          ? (errorData as any).error || JSON.stringify(errorData)
+          ? errorData.error || JSON.stringify(errorData)
           : String(errorData);
-      console.error(
-        `[AppSessionService] ${intent} FAILED:`,
-        errorMsg,
-      );
+      console.error(`[AppSessionService] ${intent} FAILED:`, errorMsg);
       throw new Error(`submit_app_state (${intent}) failed: ${errorMsg}`);
     }
 
@@ -481,7 +480,7 @@ export class AppSessionService {
       const errorData = response.res[2];
       const errorMsg =
         typeof errorData === 'object' && errorData !== null
-          ? (errorData as any).error || JSON.stringify(errorData)
+          ? errorData.error || JSON.stringify(errorData)
           : String(errorData);
       console.error('[AppSessionService] close_app_session FAILED:', errorMsg);
       throw new Error(`close_app_session failed: ${errorMsg}`);
@@ -581,7 +580,12 @@ export class AppSessionService {
     asset: string,
     amount: string,
   ): AppSessionAllocation[] {
-    let newAllocations = this.subtractAllocation(allocations, from, asset, amount);
+    let newAllocations = this.subtractAllocation(
+      allocations,
+      from,
+      asset,
+      amount,
+    );
     newAllocations = this.addAllocation(newAllocations, to, asset, amount);
     return newAllocations;
   }

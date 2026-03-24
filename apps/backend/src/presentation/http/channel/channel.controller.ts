@@ -60,7 +60,10 @@ export class ChannelController {
     @Query('userId') userId: string,
     @Query('chain') chain: string,
   ) {
-    const userAddress = await this.walletProvider.getWalletAddress(userId, chain);
+    const userAddress = await this.walletProvider.getWalletAddress(
+      userId,
+      chain,
+    );
     const channels = await this.channelManager.getChannels(userAddress);
     return {
       ok: true,

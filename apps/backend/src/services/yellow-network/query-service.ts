@@ -83,9 +83,7 @@ export class QueryService {
     const summary = balances
       .map((b) => `${b.asset.toUpperCase()}=${b.amount}`)
       .join(', ');
-    console.log(
-      `[QueryService] Unified balance: ${summary || 'empty'}`,
-    );
+    console.log(`[QueryService] Unified balance: ${summary || 'empty'}`);
 
     return balances;
   }
@@ -584,8 +582,7 @@ export class QueryService {
     ): import('./types.js').AppSessionAllocation[] {
       if (parts.length === 0) return allocs;
       const present = new Set(allocs.map((a) => a.participant.toLowerCase()));
-      const asset =
-        allocs[0]?.asset ?? 'usdc';
+      const asset = allocs[0]?.asset ?? 'usdc';
       const filled = [...allocs];
       for (const addr of parts) {
         if (!present.has(addr.toLowerCase())) {

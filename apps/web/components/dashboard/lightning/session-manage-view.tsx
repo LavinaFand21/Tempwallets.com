@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Loader2, Copy } from 'lucide-react';
 import { Button } from '@repo/ui/components/ui/button';
 import { Input } from '@repo/ui/components/ui/input';
@@ -34,14 +34,18 @@ export function SessionManageView({
   const [depositAmount, setDepositAmount] = useState('');
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [allocErrors, setAllocErrors] = useState<string | null>(null);
-  const [allocs, setAllocs] = useState<SessionAllocation[]>(session.allocations ?? []);
   const [closing, setClosing] = useState(false);
 
   useEffect(() => {
-    setAllocs(session.allocations ?? []);
     setAllocErrors(null);
     setTransferAmount('');
   }, [session.appSessionId, session.allocations]);
+
+  // Keep immutable baseline from server; derive preview allocations from it.
+  const baseAllocs = useMemo<SessionAllocation[]>(
+    () => session.allocations ?? [],
+    [session.allocations],
+  );
 
   const sessionTotalNum = (session.allocations ?? []).reduce(
     (s, a) => s + parseFloat(a.amount || '0'),
@@ -51,21 +55,71 @@ export function SessionManageView({
 
   const participantAddresses = (
     session.participants?.map((p) => p.address).filter(Boolean) ??
-    allocs.map((a) => a.participant).filter(Boolean)
+    baseAllocs.map((a) => a.participant).filter(Boolean)
   ) as string[];
 
   const userAllocIdx = walletAddress
-    ? allocs.findIndex((a) => a.participant.toLowerCase() === walletAddress.toLowerCase())
-    : 0;
-  const userAllocIdxSafe = userAllocIdx >= 0 ? userAllocIdx : 0;
-  const otherAllocIdx = allocs.length === 2 ? (userAllocIdxSafe === 0 ? 1 : 0) : -1;
-  const myCurrentAlloc = parseFloat(allocs[userAllocIdxSafe]?.amount ?? '0');
+    ? baseAllocs.findIndex(
+        (a) => a.participant.toLowerCase() === walletAddress.toLowerCase(),
+      )
+    : -1;
+  const userAllocIdxSafe = userAllocIdx >= 0 ? userAllocIdx : -1;
+  const otherAllocIdx =
+    baseAllocs.length === 2 && userAllocIdxSafe >= 0
+      ? userAllocIdxSafe === 0
+        ? 1
+        : 0
+      : -1;
+  const myCurrentAlloc =
+    userAllocIdxSafe >= 0
+      ? parseFloat(baseAllocs[userAllocIdxSafe]?.amount ?? '0')
+      : 0;
 
   const canTransfer =
     (session.status ?? '').toLowerCase() === 'open' &&
+    !!walletAddress &&
+    userAllocIdxSafe >= 0 &&
     (session.participants?.length ?? 0) >= 2 &&
-    allocs.length >= 2 &&
+    baseAllocs.length >= 2 &&
     otherAllocIdx >= 0;
+
+  const parsedTransferAmount = parseFloat(transferAmount);
+  const hasValidTransferAmount =
+    !!walletAddress &&
+    !!transferAmount &&
+    !Number.isNaN(parsedTransferAmount) &&
+    parsedTransferAmount > 0 &&
+    parsedTransferAmount <= myCurrentAlloc + 1e-9;
+
+  const previewAllocs = useMemo<SessionAllocation[]>(() => {
+    const next = baseAllocs.map((a) => ({ ...a }));
+    if (!canTransfer || !hasValidTransferAmount) return next;
+
+    const otherCurrent = parseFloat(next[otherAllocIdx]?.amount ?? '0');
+    const userNew = Math.max(0, myCurrentAlloc - parsedTransferAmount);
+    const otherNew = otherCurrent + parsedTransferAmount;
+
+    next[userAllocIdxSafe] = {
+      participant: next[userAllocIdxSafe]?.participant ?? '',
+      amount: userNew.toFixed(6),
+      asset: next[userAllocIdxSafe]?.asset ?? (session.token ?? DEFAULT_ASSET),
+    };
+    next[otherAllocIdx] = {
+      participant: next[otherAllocIdx]?.participant ?? '',
+      amount: otherNew.toFixed(6),
+      asset: next[otherAllocIdx]?.asset ?? (session.token ?? DEFAULT_ASSET),
+    };
+    return next;
+  }, [
+    baseAllocs,
+    canTransfer,
+    hasValidTransferAmount,
+    myCurrentAlloc,
+    parsedTransferAmount,
+    otherAllocIdx,
+    userAllocIdxSafe,
+    session.token,
+  ]);
 
   function getSessionAllocMap(): Map<string, string> {
     const map = new Map<string, string>();
@@ -85,7 +139,7 @@ export function SessionManageView({
 
   async function handleOperate() {
     if (!canTransfer) return;
-    const payload = allocs.map((a) => ({
+    const payload = previewAllocs.map((a) => ({
       participant: a.participant,
       amount: a.amount,
       asset: session.token ?? DEFAULT_ASSET,
@@ -100,6 +154,10 @@ export function SessionManageView({
       setAllocErrors(null);
       return;
     }
+    if (!walletAddress || userAllocIdxSafe < 0) {
+      setAllocErrors('Unable to resolve your participant allocation. Re-open session.');
+      return;
+    }
     if (parsed > myCurrentAlloc + 1e-9) {
       setAllocErrors(`Cannot exceed your allocation of ${myCurrentAlloc.toFixed(4)}.`);
       return;
@@ -108,32 +166,13 @@ export function SessionManageView({
       setAllocErrors('Counterparty allocation is not available yet.');
       return;
     }
-
-    const userNew = Math.max(0, myCurrentAlloc - parsed);
-    const otherCurrent = parseFloat(allocs[otherAllocIdx]?.amount ?? '0');
-    const otherNew = otherCurrent + parsed;
-
-    setAllocs((prev) => {
-      const next = [...prev];
-      next[userAllocIdxSafe] = {
-        participant: next[userAllocIdxSafe]?.participant ?? '',
-        amount: userNew.toFixed(6),
-        asset: next[userAllocIdxSafe]?.asset ?? (session.token ?? DEFAULT_ASSET),
-      };
-      next[otherAllocIdx] = {
-        participant: next[otherAllocIdx]?.participant ?? '',
-        amount: otherNew.toFixed(6),
-        asset: next[otherAllocIdx]?.asset ?? (session.token ?? DEFAULT_ASSET),
-      };
-      return next;
-    });
     setAllocErrors(null);
   }
 
   const handleDeposit = async () => {
     const depositAmt = parseFloat(depositAmount);
     if (!depositAmount || depositAmt <= 0) return;
-    const participant = walletAddress ?? participantAddresses[0] ?? '';
+    const participant = walletAddress ?? '';
     if (!participant) return;
     const sessionAllocMap = getSessionAllocMap();
     const currentAlloc = parseFloat(
@@ -147,7 +186,7 @@ export function SessionManageView({
   const handleWithdraw = async () => {
     const withdrawAmt = parseFloat(withdrawAmount);
     if (!withdrawAmount || withdrawAmt <= 0) return;
-    const participant = walletAddress ?? participantAddresses[0] ?? '';
+    const participant = walletAddress ?? '';
     if (!participant) return;
     const sessionAllocMap = getSessionAllocMap();
     const currentAlloc = parseFloat(
@@ -247,10 +286,12 @@ export function SessionManageView({
           <TabsContent value="transfer" className="space-y-4 mt-3">
             {!canTransfer && (
               <div className="bg-yellow-400/10 border border-yellow-300/25 rounded-lg p-2 text-[10px] text-yellow-100">
-                Counterparty has not joined yet. Transfers are disabled until both participants are present.
+                {!walletAddress || userAllocIdxSafe < 0
+                  ? 'Unable to identify your allocation yet. Re-open session and try again.'
+                  : 'Counterparty has not joined yet. Transfers are disabled until both participants are present.'}
               </div>
             )}
-            {allocs.length === 2 && sessionTotalNum > 0 && otherAllocIdx >= 0 ? (
+            {baseAllocs.length === 2 && sessionTotalNum > 0 && otherAllocIdx >= 0 ? (
               <div className="space-y-4">
                 <div className="bg-[#161616] border border-white/10 rounded-lg px-3 py-2 text-xs space-y-1">
                   <div className="flex justify-between">
@@ -262,7 +303,7 @@ export function SessionManageView({
                   <div className="flex justify-between">
                     <span className="text-gray-500">Counterparty balance</span>
                     <span className="font-medium text-gray-200">
-                      {parseFloat(allocs[otherAllocIdx]?.amount ?? '0').toFixed(4)}{' '}
+                      {parseFloat(baseAllocs[otherAllocIdx]?.amount ?? '0').toFixed(4)}{' '}
                       {session.token?.toUpperCase()}
                     </span>
                   </div>
@@ -294,9 +335,12 @@ export function SessionManageView({
                     <div className="flex justify-between">
                       <span className="text-gray-500">Counterparty</span>
                       <span className="font-medium text-yellow-200">
-                        {parseFloat(allocs[otherAllocIdx]?.amount ?? '0').toFixed(4)}
+                        {parseFloat(baseAllocs[otherAllocIdx]?.amount ?? '0').toFixed(4)}
                         {' -> '}
-                        {(parseFloat(allocs[otherAllocIdx]?.amount ?? '0') + Number(transferAmount)).toFixed(4)}
+                        {(
+                          parseFloat(baseAllocs[otherAllocIdx]?.amount ?? '0') +
+                          Number(transferAmount)
+                        ).toFixed(4)}
                       </span>
                     </div>
                   </div>
