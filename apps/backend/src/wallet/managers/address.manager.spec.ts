@@ -133,7 +133,7 @@ describe('AddressManager', () => {
         unique: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb',
         bifrost: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb',
         bifrostTestnet: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb',
-        
+
         // ERC-4337 chains
         ethereumErc4337: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb',
         baseErc4337: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb',

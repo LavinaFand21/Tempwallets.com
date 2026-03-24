@@ -1,0 +1,281 @@
+/**
+ * APP SESSION CONTROLLER
+ *
+ * Presentation Layer - HTTP Adapter
+ *
+ * Thin controller that adapts HTTP requests to use case calls.
+ *
+ * IMPORTANT: Route order matters! NestJS matches routes top-to-bottom.
+ * Static/specific segments (e.g. "discover") MUST come before generic
+ * parameter segments (":sessionId") to avoid mis-matching.
+ *
+ * Endpoint Map:
+ * POST   /app-session/authenticate        -> Authenticate wallet with Yellow Network
+ * POST   /app-session                     -> Create new app session
+ * GET    /app-session/discover/:userId    -> Discover user's sessions
+ * GET    /app-session/:sessionId/balances -> Session balances
+ * GET    /app-session/:sessionId          -> Query specific session
+ * PATCH  /app-session/:sessionId          -> Update allocations (deposit/transfer/withdraw)
+ * DELETE /app-session/:sessionId          -> Close session
+ */
+
+import {
+  Controller,
+  Post,
+  Get,
+  Patch,
+  Delete,
+  Body,
+  Param,
+  Query,
+  HttpCode,
+  HttpStatus,
+  ValidationPipe,
+  Inject,
+} from '@nestjs/common';
+
+// Use Cases
+import { AuthenticateWalletUseCase } from '../../../application/app-session/use-cases/authenticate-wallet/authenticate-wallet.use-case.js';
+import { CreateAppSessionUseCase } from '../../../application/app-session/use-cases/create-app-session/create-app-session.use-case.js';
+import { QuerySessionUseCase } from '../../../application/app-session/use-cases/query-session/query-session.use-case.js';
+import { DiscoverSessionsUseCase } from '../../../application/app-session/use-cases/discover-sessions/discover-sessions.use-case.js';
+import { UpdateAllocationUseCase } from '../../../application/app-session/use-cases/update-allocation/update-allocation.use-case.js';
+import { CloseSessionUseCase } from '../../../application/app-session/use-cases/close-session/close-session.use-case.js';
+
+// HTTP DTOs
+import { AuthenticateWalletRequestDto } from './dto/authenticate-wallet-request.dto.js';
+import { CreateAppSessionRequestDto } from './dto/create-app-session-request.dto.js';
+import { QuerySessionRequestDto } from './dto/query-session-request.dto.js';
+import { UpdateAllocationRequestDto } from './dto/update-allocation-request.dto.js';
+
+// Ports
+import type { IYellowNetworkPort } from '../../../application/app-session/ports/yellow-network.port.js';
+import { YELLOW_NETWORK_PORT } from '../../../application/app-session/ports/yellow-network.port.js';
+
+@Controller('app-session')
+export class AppSessionController {
+  constructor(
+    private readonly authenticateWalletUseCase: AuthenticateWalletUseCase,
+    private readonly createAppSessionUseCase: CreateAppSessionUseCase,
+    private readonly querySessionUseCase: QuerySessionUseCase,
+    private readonly discoverSessionsUseCase: DiscoverSessionsUseCase,
+    private readonly updateAllocationUseCase: UpdateAllocationUseCase,
+    private readonly closeSessionUseCase: CloseSessionUseCase,
+    @Inject(YELLOW_NETWORK_PORT)
+    private readonly yellowNetwork: IYellowNetworkPort,
+  ) {}
+
+  /**
+   * POST /app-session/authenticate
+   *
+   * Authenticate user's wallet with Yellow Network.
+   * This is the FIRST step - creates authenticated connection for the user.
+   */
+  @Post('authenticate')
+  @HttpCode(HttpStatus.OK)
+  async authenticate(
+    @Body(ValidationPipe) request: AuthenticateWalletRequestDto,
+  ) {
+    const result = await this.authenticateWalletUseCase.execute({
+      userId: request.userId,
+      chain: request.chain,
+    });
+
+    return {
+      ok: true,
+      authenticated: result.authenticated,
+      sessionId: result.sessionId,
+      walletAddress: result.walletAddress,
+      chain: result.chain,
+      timestamp: result.timestamp,
+      expiresAt: result.expiresAt,
+      authSignature: result.authSignature,
+    };
+  }
+
+  /**
+   * POST /app-session
+   *
+   * Create a new app session (Lightning Node).
+   * Participants are pre-authorized at creation (no "join" needed).
+   */
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  async create(@Body(ValidationPipe) request: CreateAppSessionRequestDto) {
+    const result = await this.createAppSessionUseCase.execute({
+      userId: request.userId,
+      chain: request.chain,
+      participants: request.participants,
+      weights: request.weights,
+      quorum: request.quorum,
+      token: request.token,
+      initialAllocations: request.initialAllocations,
+      sessionData: request.sessionData,
+    });
+
+    return {
+      ok: true,
+      appSessionId: result.appSessionId,
+      status: result.status,
+      version: result.version,
+      totalBalance: result.totalBalance,
+      participants: result.participants,
+      allocations: result.allocations,
+    };
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  // IMPORTANT: "discover/:userId" MUST be declared BEFORE ":sessionId"
+  // otherwise NestJS treats "discover" as a sessionId parameter.
+  // ────────────────────────────────────────────────────────────────────────
+
+  /**
+   * GET /app-session/discover/:userId
+   *
+   * Discover all app sessions where user is a participant.
+   * Yellow Network's auto-discovery feature.
+   */
+  @Get('discover/:userId')
+  async discoverSessions(
+    @Param('userId') userId: string,
+    @Query('chain') chain: string,
+    @Query('status') status?: 'open' | 'closed',
+  ) {
+    const result = await this.discoverSessionsUseCase.execute({
+      userId,
+      chain,
+      status,
+    });
+
+    return {
+      ok: true,
+      sessions: result.sessions,
+      count: result.count,
+    };
+  }
+
+  /**
+   * GET /app-session/:sessionId/balances
+   *
+   * Get the current balances/allocations within a specific app session.
+   * Uses Yellow Network's get_ledger_balances with app_session_id as account_id.
+   *
+   * This tells you how much of each asset is currently in the session.
+   *
+   * NOTE: Must be declared before GET :sessionId to avoid route collision.
+   */
+  @Get(':sessionId/balances')
+  async getSessionBalances(
+    @Param('sessionId') sessionId: string,
+    @Query('userId') userId: string,
+    @Query('chain') chain: string,
+  ) {
+    // Build balances from canonical session allocations to avoid divergence
+    // with transient/stale ledger snapshots from get_ledger_balances.
+    const session = await this.querySessionUseCase.execute({
+      userId,
+      sessionId,
+      chain,
+    });
+
+    const sumsByAsset = new Map<string, number>();
+    for (const alloc of session.allocations ?? []) {
+      const asset = String(alloc.asset ?? session.token ?? 'usdc').toLowerCase();
+      const next = (sumsByAsset.get(asset) ?? 0) + Number.parseFloat(String(alloc.amount ?? '0'));
+      sumsByAsset.set(asset, Number.isFinite(next) ? next : 0);
+    }
+    const balances = [...sumsByAsset.entries()].map(([asset, amount]) => ({
+      asset,
+      amount: amount.toFixed(6),
+      locked: '0',
+      available: amount.toFixed(6),
+    }));
+
+    return {
+      ok: true,
+      appSessionId: sessionId,
+      data: { balances },
+      balances,
+    };
+  }
+
+  /**
+   * GET /app-session/:sessionId
+   *
+   * Query a specific app session.
+   * User must be a participant.
+   */
+  @Get(':sessionId')
+  async querySession(
+    @Param('sessionId') sessionId: string,
+    @Query('userId') userId: string,
+    @Query('chain') chain: string,
+  ) {
+    const result = await this.querySessionUseCase.execute({
+      userId,
+      sessionId,
+      chain,
+    });
+
+    // Return session data both as top-level `session` and as `data` for
+    // frontend compatibility (yellowApi checks res.data ?? res.session).
+    return {
+      ok: true,
+      data: result,
+      session: result,
+    };
+  }
+
+  /**
+   * PATCH /app-session/:sessionId
+   *
+   * Update allocations (deposit, transfer, withdraw).
+   * All allocation changes go through this single endpoint.
+   */
+  @Patch(':sessionId')
+  @HttpCode(HttpStatus.OK)
+  async updateAllocation(
+    @Param('sessionId') sessionId: string,
+    @Body(ValidationPipe) request: UpdateAllocationRequestDto,
+  ) {
+    const result = await this.updateAllocationUseCase.execute({
+      userId: request.userId,
+      appSessionId: sessionId,
+      chain: request.chain,
+      intent: request.intent,
+      allocations: request.allocations,
+    });
+
+    return {
+      ok: true,
+      appSessionId: result.appSessionId,
+      version: result.version,
+      allocations: result.allocations,
+      session: result.session,
+    };
+  }
+
+  /**
+   * DELETE /app-session/:sessionId
+   *
+   * Close app session and return funds to unified balance.
+   */
+  @Delete(':sessionId')
+  @HttpCode(HttpStatus.OK)
+  async closeSession(
+    @Param('sessionId') sessionId: string,
+    @Query('userId') userId: string,
+    @Query('chain') chain: string,
+  ) {
+    const result = await this.closeSessionUseCase.execute({
+      userId,
+      appSessionId: sessionId,
+      chain,
+    });
+
+    return {
+      ok: true,
+      closed: result.closed,
+    };
+  }
+}

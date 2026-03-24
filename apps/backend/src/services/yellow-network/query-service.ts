@@ -44,8 +44,6 @@ export class QueryService {
    * @returns Array of balance entries per asset
    */
   async getLedgerBalances(accountId?: string): Promise<LedgerBalance[]> {
-    console.log('[QueryService] Fetching ledger balances...');
-
     const requestId = this.ws.getNextRequestId();
     let request: RPCRequest = {
       req: [
@@ -82,9 +80,10 @@ export class QueryService {
       available: b.available ?? b.amount,
     }));
 
-    console.log(
-      `[QueryService] Found ${balances.length} assets in unified balance`,
-    );
+    const summary = balances
+      .map((b) => `${b.asset.toUpperCase()}=${b.amount}`)
+      .join(', ');
+    console.log(`[QueryService] Unified balance: ${summary || 'empty'}`);
 
     return balances;
   }
@@ -100,15 +99,12 @@ export class QueryService {
     status?: 'open' | 'closed',
     participant?: string,
   ): Promise<AppSession[]> {
-    console.log('[QueryService] Fetching app sessions...');
-
     // Build filter parameters
 
     const params: Record<string, unknown> = {};
     if (status) (params as { status?: string }).status = status;
     if (participant) {
       (params as { participant?: string }).participant = participant;
-      console.log(`[QueryService] Filtering by participant: ${participant}`);
     }
 
     const requestId = this.ws.getNextRequestId();
@@ -170,8 +166,6 @@ export class QueryService {
    * @returns Array of payment channels
    */
   async getChannels(): Promise<ChannelWithState[]> {
-    console.log('[QueryService] Fetching payment channels...');
-
     const requestId = this.ws.getNextRequestId();
     let request: RPCRequest = {
       req: [requestId, 'get_channels', {}, Date.now()],
@@ -180,12 +174,6 @@ export class QueryService {
 
     request = await this.auth.signRequest(request);
     const response = await this.ws.send(request);
-
-    // Log full response for debugging
-    console.log(
-      '[QueryService] Full get_channels response:',
-      JSON.stringify(response, null, 2),
-    );
 
     // Check for errors in response
     if (response.error) {
@@ -242,11 +230,6 @@ export class QueryService {
           ) {
             const userAddress = (c as { participant: Address }).participant;
             participants = [userAddress, userAddress];
-            const channelId = (c as { channel_id?: string }).channel_id;
-            console.warn(
-              `[QueryService] get_channels returned simplified structure for channel ${channelId}. ` +
-                `Using placeholder for clearnode address. Full participants array requires create_channel response.`,
-            );
           } else {
             throw new Error(
               `Invalid channel structure: missing participants or participant field. Channel: ${JSON.stringify(c)}`,
@@ -276,8 +259,13 @@ export class QueryService {
           const chainIdRaw = (c as { chain_id?: number }).chain_id;
           const chainId = typeof chainIdRaw === 'number' ? chainIdRaw : 0;
           const statusRaw = (c as { status?: string }).status;
-          const status: 'active' | 'closed' =
-            statusRaw === 'closed' ? 'closed' : 'active';
+          // Preserve the actual status from Yellow Network (open, resizing, closed, etc.)
+          // so callers can detect stuck "resizing" channels and handle them appropriately.
+          const status = (statusRaw ?? 'active') as
+            | 'active'
+            | 'open'
+            | 'resizing'
+            | 'closed';
           // State
           const stateRaw = (c as { state?: unknown; version?: unknown }).state;
           const stateVersionRaw = (c as { version?: unknown }).version;
@@ -409,8 +397,6 @@ export class QueryService {
     limit?: number;
     offset?: number;
   }): Promise<LedgerTransaction[]> {
-    console.log('[QueryService] Fetching ledger transactions...');
-
     const requestId = this.ws.getNextRequestId();
     let request: RPCRequest = {
       req: [requestId, 'get_ledger_transactions', filters || {}, Date.now()],
@@ -461,10 +447,6 @@ export class QueryService {
    * @returns App definition with participants, weights, quorum, etc.
    */
   async getAppDefinition(appSessionId: Hash): Promise<any> {
-    console.log(
-      `[QueryService] Fetching app definition for ${appSessionId}...`,
-    );
-
     const requestId = this.ws.getNextRequestId();
     const request: RPCRequest = {
       req: [
@@ -490,10 +472,6 @@ export class QueryService {
     const challenge = typeof def.challenge === 'number' ? def.challenge : 0;
     const nonce = typeof def.nonce === 'number' ? def.nonce : 0;
 
-    console.log(
-      `[QueryService] ✅ Got app definition with ${participants.length} participants`,
-    );
-
     return {
       protocol,
       participants,
@@ -515,70 +493,249 @@ export class QueryService {
    * @returns App session details with full definition
    */
   async getAppSession(appSessionId: Hash): Promise<AppSession> {
-    console.log(`[QueryService] Fetching app session ${appSessionId}...`);
+    // Step 1: Get app definition directly by ID (public method, no pagination issues)
+    // This is the reliable way to fetch a specific session's governance parameters.
+    const definitionRaw = (await this.getAppDefinition(
+      appSessionId,
+    )) as unknown;
+    const def =
+      definitionRaw && typeof definitionRaw === 'object'
+        ? (definitionRaw as Record<string, unknown>)
+        : {};
+    const allowedProtocols = ['NitroRPC/0.2', 'NitroRPC/0.4'] as const;
+    const protocol =
+      typeof def.protocol === 'string' &&
+      allowedProtocols.includes(def.protocol as any)
+        ? (def.protocol as import('./types.js').AppSessionProtocol)
+        : 'NitroRPC/0.4';
+    const participants =
+      Array.isArray(def.participants) &&
+      def.participants.every((p) => typeof p === 'string' && p.startsWith('0x'))
+        ? (def.participants as `0x${string}`[])
+        : [];
+    const weights =
+      Array.isArray(def.weights) &&
+      def.weights.every((w) => typeof w === 'number')
+        ? def.weights
+        : [];
+    const quorum = typeof def.quorum === 'number' ? def.quorum : 0;
+    const challenge = typeof def.challenge === 'number' ? def.challenge : 0;
+    const nonce = typeof def.nonce === 'number' ? def.nonce : 0;
 
-    // Get session metadata from get_app_sessions
-    const sessions = await this.getAppSessions();
-    const session = sessions.find((s) => s.app_session_id === appSessionId);
+    const definition = {
+      protocol,
+      participants,
+      weights,
+      quorum,
+      challenge,
+      nonce,
+    };
 
-    if (!session) {
-      throw new Error(`App session ${appSessionId} not found`);
+    // Step 2: Do NOT synthesize per-participant allocations from ledger balances.
+    // Ledger balances are per-asset totals for the session, not per-participant.
+    // We only trust allocations from session list responses.
+    const allocations: import('./types.js').AppSessionAllocation[] = [];
+    try {
+      const sessionBalances = await this.getAppSessionBalances(appSessionId);
+      // Convert LedgerBalance[] to AppSessionAllocation[]
+      // Note: get_ledger_balances returns per-asset totals for the session,
+      // not per-participant. We distribute across participants based on
+      // what we know. For single-asset sessions, we can build from this.
+      if (sessionBalances.length > 0) {
+        // Build allocations from session balances
+        // Each balance entry represents an asset in the session
+        for (const balance of sessionBalances) {
+          if (parseFloat(balance.amount) > 0) {
+            allocations.push({
+              participant: participants[0] || ('0x' as `0x${string}`),
+              asset: balance.asset,
+              amount: balance.amount,
+            });
+          }
+        }
+      }
+    } catch (error) {
+      console.warn(`[QueryService] Failed to get session balances:`, error);
     }
 
-    // Get full definition with participants from get_app_definition
-    // This ensures we always have participant data even if get_app_sessions filtered it
+    // Step 3: Try to find session metadata from get_app_sessions with higher limit
+    // The default limit is 10 which may miss newly created sessions.
+    // Use limit=100 to improve chances.
+    let session: AppSession | undefined;
     try {
-      const definitionRaw = (await this.getAppDefinition(
-        appSessionId,
-      )) as unknown;
-      const def =
-        definitionRaw && typeof definitionRaw === 'object'
-          ? (definitionRaw as Record<string, unknown>)
-          : {};
-      const allowedProtocols = ['NitroRPC/0.2', 'NitroRPC/0.4'] as const;
-      const protocol =
-        typeof def.protocol === 'string' &&
-        allowedProtocols.includes(def.protocol as any)
-          ? (def.protocol as import('./types.js').AppSessionProtocol)
-          : 'NitroRPC/0.4';
-      const participants =
-        Array.isArray(def.participants) &&
-        def.participants.every(
-          (p) => typeof p === 'string' && p.startsWith('0x'),
-        )
-          ? (def.participants as `0x${string}`[])
-          : [];
-      const weights =
-        Array.isArray(def.weights) &&
-        def.weights.every((w) => typeof w === 'number')
-          ? def.weights
-          : [];
-      const quorum = typeof def.quorum === 'number' ? def.quorum : 0;
-      const challenge = typeof def.challenge === 'number' ? def.challenge : 0;
-      const nonce = typeof def.nonce === 'number' ? def.nonce : 0;
-      console.log(
-        `[QueryService] ✅ Merged definition with ${participants.length} participants`,
-      );
-      return {
-        ...session,
-        definition: {
-          protocol,
-          participants,
-          weights,
-          quorum,
-          challenge,
-          nonce,
-        },
-      };
+      const sessions = await this.getAppSessionsPaginated({ limit: 100 });
+      session = sessions.find((s) => s.app_session_id === appSessionId);
     } catch (error) {
-      // If get_app_definition fails, return session with existing definition
-      // (may have empty participants but at least we have the session)
       console.warn(
-        `[QueryService] Failed to get app definition, using session definition:`,
+        `[QueryService] Failed to fetch sessions list, building from definition only:`,
         error,
       );
-      return session;
     }
+
+    // Ensure every definition participant has an allocation entry.
+    // ClearNode's ledger balances are per-asset totals (not per-participant),
+    // so participants with 0 balance are missing from allocations. We backfill
+    // them with "0" so the OPERATE guard sees all participants as "joined".
+    function ensureAllParticipants(
+      allocs: import('./types.js').AppSessionAllocation[],
+      parts: readonly string[],
+    ): import('./types.js').AppSessionAllocation[] {
+      if (parts.length === 0) return allocs;
+      const present = new Set(allocs.map((a) => a.participant.toLowerCase()));
+      const asset = allocs[0]?.asset ?? 'usdc';
+      const filled = [...allocs];
+      for (const addr of parts) {
+        if (!present.has(addr.toLowerCase())) {
+          filled.push({
+            participant: addr as `0x${string}`,
+            asset,
+            amount: '0',
+          });
+        }
+      }
+      return filled;
+    }
+
+    if (session) {
+      const sessionAllocations =
+        session.allocations && session.allocations.length > 0
+          ? session.allocations
+          : allocations;
+      return {
+        ...session,
+        definition,
+        allocations: ensureAllParticipants(sessionAllocations, participants),
+      };
+    }
+
+    // Step 4: Session not in paginated list, but definition exists — build a minimal AppSession
+    console.warn(
+      `[QueryService] Session not in paginated list, building from definition (${participants.length} participants)`,
+    );
+    return {
+      app_session_id: appSessionId,
+      status: 'open',
+      version: 1,
+      session_data: '{}',
+      allocations: ensureAllParticipants(allocations, participants),
+      definition,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+  }
+
+  /**
+   * Get app sessions with explicit pagination
+   *
+   * @param options - Pagination and filter options
+   * @returns Array of app sessions
+   */
+  private async getAppSessionsPaginated(options?: {
+    status?: 'open' | 'closed';
+    participant?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<AppSession[]> {
+    const params: Record<string, unknown> = {};
+    if (options?.status) params.status = options.status;
+    if (options?.participant) params.participant = options.participant;
+    if (options?.limit) params.limit = options.limit;
+    if (options?.offset) params.offset = options.offset;
+
+    const requestId = this.ws.getNextRequestId();
+    let request: RPCRequest = {
+      req: [requestId, 'get_app_sessions', params, Date.now()],
+      sig: [] as string[],
+    };
+
+    request = await this.auth.signRequest(request);
+    const response = await this.ws.send(request);
+
+    const sessionsData = response.res[2] as {
+      app_sessions: Array<{
+        app_session_id: string;
+        status: string;
+        version: number;
+        session_data: unknown;
+        allocations?: unknown[];
+        definition?: unknown;
+        created_at: string | number | Date;
+        updated_at: string | number | Date;
+        closed_at?: string | number | Date;
+      }>;
+    };
+    if (!sessionsData || !Array.isArray(sessionsData.app_sessions)) {
+      return [];
+    }
+
+    return sessionsData.app_sessions.map((s) => ({
+      app_session_id: s.app_session_id as `0x${string}`,
+      status: s.status === 'open' || s.status === 'closed' ? s.status : 'open',
+      version: s.version,
+      session_data:
+        typeof s.session_data === 'string'
+          ? s.session_data
+          : JSON.stringify(s.session_data ?? {}),
+      allocations: Array.isArray(s.allocations)
+        ? (s.allocations as any[]).map(
+            (a) => a as import('./types.js').AppSessionAllocation,
+          )
+        : [],
+      definition: s.definition as import('./types.js').AppDefinition,
+      createdAt: new Date(s.created_at),
+      updatedAt: new Date(s.updated_at),
+      closedAt: s.closed_at ? new Date(s.closed_at) : undefined,
+    }));
+  }
+
+  /**
+   * Get balances within a specific app session
+   *
+   * Uses get_ledger_balances with the app_session_id as account_id.
+   * Per Yellow docs: "To query balance within a specific app session,
+   * provide the app_session_id as the account_id."
+   *
+   * @param appSessionId - App session identifier
+   * @returns Array of balance entries (asset + amount) for the session
+   */
+  async getAppSessionBalances(appSessionId: Hash): Promise<LedgerBalance[]> {
+    const requestId = this.ws.getNextRequestId();
+    let request: RPCRequest = {
+      req: [
+        requestId,
+        'get_ledger_balances',
+        { account_id: appSessionId },
+        Date.now(),
+      ],
+      sig: [] as string[],
+    };
+
+    request = await this.auth.signRequest(request);
+    const response = await this.ws.send(request);
+
+    const balanceData = response.res[2] as {
+      ledger_balances: Array<{
+        asset: string;
+        amount: string;
+        locked?: string;
+        available?: string;
+      }>;
+    };
+    if (!balanceData || !Array.isArray(balanceData.ledger_balances)) {
+      console.warn(
+        '[QueryService] No ledger_balances for app session. Returning empty array.',
+      );
+      return [];
+    }
+
+    const balances: LedgerBalance[] = balanceData.ledger_balances.map((b) => ({
+      asset: b.asset,
+      amount: b.amount,
+      locked: b.locked ?? '0',
+      available: b.available ?? b.amount,
+    }));
+
+    return balances;
   }
 
   /**

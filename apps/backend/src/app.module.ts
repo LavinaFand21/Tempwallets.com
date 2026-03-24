@@ -7,8 +7,13 @@ import { UserModule } from './user/user.module.js';
 import { LightningNodeModule } from './lightning-node/lightning-node.module.js';
 import { WalletConnectModule } from './walletconnect/walletconnect.module.js';
 import { HealthController } from './health.controller.js';
-import { ScheduleModule } from "@nestjs/schedule";
-import { RateLimitCleanupService } from "./rate-limit-cleanup-service.js";
+import { ScheduleModule } from '@nestjs/schedule';
+import { RateLimitCleanupService } from './rate-limit-cleanup-service.js';
+
+// Clean Architecture Modules (Yellow Network)
+import { AppSessionModule } from './presentation/http/app-session/app-session.module.js';
+import { CustodyModule } from './presentation/http/custody/custody.module.js';
+import { ChannelModule } from './presentation/http/channel/channel.module.js';
 
 @Module({
   imports: [
@@ -24,8 +29,12 @@ import { RateLimitCleanupService } from "./rate-limit-cleanup-service.js";
     UserModule,
     LightningNodeModule,
     WalletConnectModule,
+    // Clean Architecture modules
+    AppSessionModule,
+    CustodyModule,
+    ChannelModule,
   ],
   controllers: [HealthController],
   providers: [RateLimitCleanupService],
 })
-export class AppModule { }
+export class AppModule {}

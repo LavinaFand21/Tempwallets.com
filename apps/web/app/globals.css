@@ -64,3 +64,38 @@
 .animate-casino-sparkle {
   animation: casino-sparkle 0.6s ease-in-out;
 }
+
+/* Fade helpers used by Lightning intro / view transitions */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* Donut ring glow animation (Lightning Balances) */
+@keyframes ring-glow {
+  0%, 100% {
+    filter: drop-shadow(0 0 6px rgba(234, 179, 8, 0.35));
+  }
+  50% {
+    filter: drop-shadow(0 0 16px rgba(234, 179, 8, 0.65));
+  }
+}
+
+.animate-ring-glow {
+  animation: ring-glow 1.2s ease-in-out infinite;
+}

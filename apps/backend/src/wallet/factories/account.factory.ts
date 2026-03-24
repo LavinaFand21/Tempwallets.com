@@ -12,9 +12,7 @@ import { NativeEoaFactory } from './native-eoa.factory.js';
 export class AccountFactory implements IAccountFactory {
   private readonly logger = new Logger(AccountFactory.name);
 
-  constructor(
-    private readonly nativeEoaFactory: NativeEoaFactory,
-  ) {}
+  constructor(private readonly nativeEoaFactory: NativeEoaFactory) {}
 
   getAccountType(): string {
     return 'EOA';
@@ -28,9 +26,7 @@ export class AccountFactory implements IAccountFactory {
     const normalizedChain = chain.replace(/Erc4337$/i, '').toLowerCase();
 
     if (!this.isSupportedEvmChain(normalizedChain)) {
-      throw new Error(
-        `Native EOA factory does not support chain: ${chain}`,
-      );
+      throw new Error(`Native EOA factory does not support chain: ${chain}`);
     }
 
     this.logger.debug(

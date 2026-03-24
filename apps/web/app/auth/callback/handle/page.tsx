@@ -2,7 +2,7 @@
 
 import { useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { trackAuth, identifyUser, aliasUser } from '@/lib/tempwallets-analytics';
+import { trackAuth, identifyUser } from '@/lib/tempwallets-analytics';
 
 function AuthCallbackHandleContent() {
   const searchParams = useSearchParams();
@@ -25,8 +25,8 @@ function AuthCallbackHandleContent() {
         // Track successful login
         trackAuth.signinSuccess(userData.id, 'google');
 
-        // Identify user in Mixpanel
-        aliasUser(userData.id);
+        // Identify user in Mixpanel (handles anonymous → authenticated transition)
+        // Note: aliasUser() is deprecated in Simplified ID Merge — identify() does everything
         identifyUser(userData.id, {
           email: userData.email,
           name: userData.name,

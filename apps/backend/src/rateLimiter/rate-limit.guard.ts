@@ -11,7 +11,7 @@ import { verifyProof } from 'zkarb-sdk';
 import path from 'path';
 
 const LIMIT = 100;
-const WINDOW_MS = 24*60*60 * 1000; // Change to 24*60*60*1000 for production
+const WINDOW_MS = 24 * 60 * 60 * 1000; // Change to 24*60*60*1000 for production
 
 @Injectable()
 export class RateLimitGuard implements CanActivate {
@@ -31,7 +31,9 @@ export class RateLimitGuard implements CanActivate {
     const nowMs = Date.now();
     const windowEndMs = nowMs + WINDOW_MS;
 
-    this.logger.log(`[RateLimit] Request for device ${deviceId} at ${new Date(nowMs).toISOString()}`);
+    this.logger.log(
+      `[RateLimit] Request for device ${deviceId} at ${new Date(nowMs).toISOString()}`,
+    );
 
     return this.prisma.$transaction(async (tx: any) => {
       // Fetch current record
@@ -41,7 +43,7 @@ export class RateLimitGuard implements CanActivate {
 
       this.logger.debug(`[RateLimit] DB record: ${JSON.stringify(record)}`);
 
-      let shouldReset = !record || (record.resetAt?.getTime() ?? 0) < nowMs;
+      const shouldReset = !record || (record.resetAt?.getTime() ?? 0) < nowMs;
 
       this.logger.log(
         `[RateLimit] shouldReset = ${shouldReset} | resetAt = ${
@@ -64,7 +66,9 @@ export class RateLimitGuard implements CanActivate {
           },
         });
       } else {
-        this.logger.log(`[RateLimit] Window still active – current count = ${record.count}`);
+        this.logger.log(
+          `[RateLimit] Window still active – current count = ${record.count}`,
+        );
       }
 
       // At this point record.count should reflect the real value
@@ -84,9 +88,14 @@ export class RateLimitGuard implements CanActivate {
       let zkResult: any;
       try {
         zkResult = await verifyProof(zkInput, generatedFolder);
-        this.logger.log(`[ZK] Verification result: ${JSON.stringify(zkResult)}`);
+        this.logger.log(
+          `[ZK] Verification result: ${JSON.stringify(zkResult)}`,
+        );
       } catch (err: any) {
-        this.logger.error(`[ZK] Proof verification failed: ${err.message}`, err.stack);
+        this.logger.error(
+          `[ZK] Proof verification failed: ${err.message}`,
+          err.stack,
+        );
         throw new HttpException(
           { message: 'ZK verification error' },
           HttpStatus.INTERNAL_SERVER_ERROR,
@@ -94,11 +103,15 @@ export class RateLimitGuard implements CanActivate {
       }
 
       // Assuming publicSignals[0] === "1" means allowed (count < limit)
-      const isAllowed = zkResult?.publicSignals?.[0] === '1' || zkResult?.publicSignals?.[0] === 1;
+      const isAllowed =
+        zkResult?.publicSignals?.[0] === '1' ||
+        zkResult?.publicSignals?.[0] === 1;
 
       if (!isAllowed) {
         const retryAfter = Math.ceil((record.resetAt.getTime() - nowMs) / 1000);
-        this.logger.warn(`[RateLimit] ZK denied – count ${record.count} >= ${LIMIT}`);
+        this.logger.warn(
+          `[RateLimit] ZK denied – count ${record.count} >= ${LIMIT}`,
+        );
 
         throw new HttpException(
           {
@@ -112,7 +125,9 @@ export class RateLimitGuard implements CanActivate {
       }
 
       // ZK passed → safe to increment
-      this.logger.log(`[RateLimit] ZK allowed – incrementing count to ${record.count + 1}`);
+      this.logger.log(
+        `[RateLimit] ZK allowed – incrementing count to ${record.count + 1}`,
+      );
 
       await tx.rateLimit.update({
         where: { deviceId },

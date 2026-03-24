@@ -1,6 +1,7 @@
 'use client';
 
 import { ReactNode } from 'react';
+import { Toaster } from 'sonner';
 import { WalletDataProvider } from '@/contexts/wallet-data-context';
 import { useAuth } from '@/hooks/useAuth';
 import { MixpanelProvider } from '@/components/analytics/mixpanel-provider';
@@ -20,6 +21,7 @@ export function Providers({ children }: ProvidersProps) {
     <MixpanelProvider>
       <WalletDataProvider userId={userId}>
         {children}
+        <Toaster position="top-right" richColors closeButton />
       </WalletDataProvider>
     </MixpanelProvider>
   );

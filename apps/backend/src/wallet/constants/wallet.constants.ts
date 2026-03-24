@@ -34,11 +34,7 @@ export const EOA_CHAIN_KEYS: Array<
   'bifrostTestnet',
 ];
 
-export const NON_EVM_CHAIN_KEYS: Array<
-  | 'tron'
-  | 'bitcoin'
-  | 'solana'
-> = [
+export const NON_EVM_CHAIN_KEYS: Array<'tron' | 'bitcoin' | 'solana'> = [
   'tron',
   'bitcoin',
   'solana',
