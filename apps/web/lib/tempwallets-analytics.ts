@@ -1,23 +1,41 @@
-// lib/tempwallets-analytics.ts
-// Centralized analytics helper for Tempwallets.com
+/**
+ * Tempwallets Analytics Module
+ *
+ * High-level analytics wrappers for common user actions.
+ * Uses the core Mixpanel module for tracking.
+ */
 
 import {
   trackEvent,
-  identifyUser,
-  aliasUser,
+  identifyUser as coreIdentifyUser,
   resetMixpanel,
+  incrementUserProperty,
+  setUserProperties,
+  isIdentified,
 } from "./mixpanel";
 
 // Re-export Mixpanel functions for direct use
-export { identifyUser, aliasUser, resetMixpanel };
+export { resetMixpanel, isIdentified };
+
+/**
+ * Identify a user (wrapper around core identify)
+ */
+export const identifyUser = (
+  userId: string,
+  traits?: {
+    email?: string;
+    name?: string;
+    picture?: string;
+    [key: string]: unknown;
+  },
+) => {
+  coreIdentifyUser(userId, traits);
+};
 
 /**
  * Track guest vs registered user visits
  */
-export const trackUserVisit = (
-  isAuthenticated: boolean,
-  userId?: string,
-) => {
+export const trackUserVisit = (isAuthenticated: boolean, userId?: string) => {
   if (isAuthenticated && userId) {
     trackEvent("registered_user_visit", {
       userId,
@@ -43,6 +61,7 @@ export const trackWalletGeneration = {
       network,
       duration,
     });
+    incrementUserProperty("total_wallets_generated");
   },
   failed: (error: string, errorCode?: string) => {
     trackEvent("wallet_generation_failed", {
@@ -80,6 +99,7 @@ export const trackTransaction = {
       token,
       chain,
     });
+    incrementUserProperty("total_transactions");
   },
   sendFailed: (error: string, errorCode?: string | number) => {
     trackEvent("send_transaction_failed", {
@@ -96,8 +116,8 @@ export const trackAuth = {
   signupClicked: () => trackEvent("signup_button_clicked"),
   signupSuccess: (userId: string, email?: string) => {
     trackEvent("user_signup", { userId, email });
-    aliasUser(userId);
-    identifyUser(userId, { email });
+    // Identify on signup (creates profile with first_seen)
+    coreIdentifyUser(userId, { email });
   },
   signupFailed: (error: string) => {
     trackEvent("user_signup_failed", { error });
@@ -105,6 +125,8 @@ export const trackAuth = {
   signinClicked: () => trackEvent("signin_button_clicked"),
   signinSuccess: (userId: string, method?: string) => {
     trackEvent("user_login", { userId, method });
+    incrementUserProperty("total_logins");
+    setUserProperties({ last_login_at: new Date().toISOString() });
   },
   signinFailed: (error: string, errorCode?: string) => {
     trackEvent("user_login_failed", { error, errorCode });

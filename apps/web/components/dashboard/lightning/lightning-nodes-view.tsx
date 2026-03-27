@@ -1,565 +1,432 @@
+// Directory structure for Lightning dashboard components:
+//
+// File                         Purpose
+// --------------------------   ------------------------------------------------------------
+// lightning-constants.ts       Shared constants (CHAINS, ASSETS, DEFAULT_CHAIN, etc.), and
+//                             utility functions (copyToClipboard, formatExpiry, truncate)
+//
+// field-error.tsx              Tiny reusable FieldError validation message component
+// status-card.tsx              Authentication status card (Status tab)
+// balances-card.tsx            Balance ring chart + lightning/on-chain split (Balances tab)
+// custody-actions-card.tsx     Deposit / Withdraw / Move channel funds (Move Funds tab)
+// session-card.tsx             Individual session card in the sessions list
+// create-session-form.tsx      Create session dialog form
+// join-session-form.tsx        Join session dialog form
+// session-manage-view.tsx      Session detail/manage dialog (transfer slider, deposit, withdraw, close)
+// lightning-nodes-view.tsx     Slim orchestrator — hooks + tab routing + dialog, imports everything above
+
+
 'use client';
 
-import { useEffect, useState } from 'react';
-import Image from 'next/image';
-import { Loader2, Zap, Copy, ChevronRight, Mail, CheckCircle2, AlertCircle, Plus } from 'lucide-react';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@repo/ui/components/ui/tooltip';
-import { useLightningNodes } from '@/hooks/lightning-nodes-context';
-import { CreateLightningNodeModal } from './create-lightning-node-modal';
-import { LightningNodeDetails } from './lightning-node-details';
-import { FundChannelModal } from '../modals/fund-channel-modal';
-import { LightningNode } from '@/lib/api';
+import type React from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { Loader2, Zap, RefreshCw } from 'lucide-react';
+import { toast } from 'sonner';
+import { Button } from '@repo/ui/components/ui/button';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@repo/ui/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@repo/ui/components/ui/tabs';
+import { useAuth } from '@/hooks/useAuth';
+import {
+  useYellowAuth,
+  useYellowBalances,
+  useCustodyActions,
+  useChannelActions,
+  useAppSessions,
+} from '@/hooks/useYellowNetwork';
+import { AppSession, SessionAllocation } from '@/lib/yellow-api';
+import { CHAINS, DEFAULT_CHAIN, DEFAULT_ASSET } from './lightning-constants';
+import { StatusCard } from './status-card';
+import { BalancesCard } from './balances-card';
+import { CustodyActionsCard } from './custody-actions-card';
+import { SessionCard } from './session-card';
+import { CreateSessionForm } from './create-session-form';
+import { JoinSessionForm } from './join-session-form';
+import { SessionManageView } from './session-manage-view';
+import { SessionDialog } from './session-dialog';
 
-const LAST_SELECTED_LN_NODE_ID_KEY = 'tempwallets:lastSelectedLightningNodeId';
+type DialogMode = 'create' | 'join' | 'manage';
+type LightningTopTab = 'status' | 'balances' | 'moveFunds' | 'appSessions';
 
-const CHAIN_NAMES: Record<string, string> = {
-  ethereum: 'Ethereum',
-  ethereumErc4337: 'Ethereum Gasless',
-  base: 'Base',
-  baseErc4337: 'Base Gasless',
-  arbitrum: 'Arbitrum',
-  arbitrumErc4337: 'Arbitrum Gasless',
-  polygon: 'Polygon',
-  polygonErc4337: 'Polygon Gasless',
-};
-
-/**
- * Authentication Status Banner Component
- * Shows wallet authentication status at the top
- */
-function AuthenticationBanner({
-  authenticated,
-  authenticating,
-  walletAddress,
-  error,
-}: {
-  authenticated: boolean;
-  authenticating: boolean;
-  walletAddress: string | null;
-  error: string | null;
-}) {
-  const [copiedAddress, setCopiedAddress] = useState(false);
-
-  const handleCopyAddress = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (walletAddress) {
-      navigator.clipboard.writeText(walletAddress);
-      setCopiedAddress(true);
-      setTimeout(() => setCopiedAddress(false), 2000);
-    }
-  };
-
-  if (authenticating) {
-    return (
-      <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 mb-4 flex items-center gap-3">
-        <Loader2 className="h-5 w-5 animate-spin text-gray-600" />
-        <div>
-          <p className="font-rubik-medium text-gray-900">Authenticating Wallet</p>
-          <p className="text-sm text-gray-700">Establishing clearnode connection...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (error && !authenticated) {
-    return (
-      <div className="bg-gray-100 border border-gray-300 rounded-xl p-4 mb-4 flex items-center gap-3">
-        <AlertCircle className="h-5 w-5 text-gray-700" />
-        <div>
-          <p className="font-rubik-medium text-gray-900">Authentication Failed</p>
-          <p className="text-sm text-gray-700">{error}</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (authenticated && walletAddress) {
-    return (
-      <div className="space-y-3 mb-4">
-        {/* Wallet Status */}
-        <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 flex items-center gap-3">
-          <CheckCircle2 className="h-5 w-5 text-gray-700" />
-          <div className="flex-1">
-            <p className="font-rubik-medium text-gray-900">
-              Wallet Authenticated
-            </p>
-            <div className="flex items-center gap-2 mt-1">
-              <p 
-                className="text-sm text-gray-700 font-mono cursor-pointer hover:text-gray-900 transition-colors"
-                onClick={handleCopyAddress}
-                title="Click to copy full address"
-              >
-                {walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}
-              </p>
-              <button
-                onClick={handleCopyAddress}
-                className="text-gray-600 hover:text-gray-900 transition-colors p-1 rounded hover:bg-gray-200"
-                title="Copy wallet address"
-              >
-                <Copy className="h-3.5 w-3.5" />
-              </button>
-              {copiedAddress && (
-                <span className="text-xs text-green-600 font-medium">Copied!</span>
-              )}
-            </div>
-          </div>
-          <div className="ml-auto flex items-center gap-2">
-            {/* Unified Balance tile (Coming Soon) */}
-            <TooltipProvider>
-              <Tooltip delayDuration={150}>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    disabled
-                    className="inline-flex items-center justify-center px-3 py-1 rounded-lg bg-black text-white text-xs font-rubik-medium cursor-not-allowed opacity-80"
-                  >
-                    <Plus className="h-3 w-3 mr-1" />
-                    Unified Balance
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent
-                  side="top"
-                  className="bg-black/85 text-white text-xs px-3 py-2 rounded-md border border-white/10 max-w-xs space-y-1.5"
-                >
-                  <p className="font-semibold">Unified Balance</p>
-                  <p className="text-[11px] font-medium text-gray-200">Coming soon</p>
-                  <p className="text-[11px]">
-                    Unified balance funding is disabled in production right now. This feature will be available soon.
-                  </p>
-                  <p className="pt-1 text-[11px] text-white/80">
-                    Add Funds to Unified Balance
-                  </p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  return null;
+interface SessionDialogState {
+  open: boolean;
+  mode: DialogMode;
+  managedSession: AppSession | null;
 }
 
-// Join search input removed; join is now inside the Create modal.
-
-/**
- * Lightning Node Card Component
- * Displays information about a single Lightning Node
- */
-function LightningNodeCard({
-  node,
-  onClick,
-  isInvitation = false,
+export function LightningNodesView({
+  onYellowAuthStateChangeAction,
 }: {
-  node: LightningNode;
-  onClick?: () => void;
-  isInvitation?: boolean;
+  onYellowAuthStateChangeAction?: (next: { authenticated: boolean; authenticating: boolean }) => void;
 }) {
-  const [copiedId, setCopiedId] = useState(false);
-  const [copiedUri, setCopiedUri] = useState(false);
+  const { userId } = useAuth();
+  const [chain, setChain] = useState(DEFAULT_CHAIN);
 
-  const handleCopyChannelId = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    navigator.clipboard.writeText(node.appSessionId);
-    setCopiedId(true);
-    setTimeout(() => setCopiedId(false), 2000);
-  };
-
-  const handleCopyUri = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    navigator.clipboard.writeText(node.uri);
-    setCopiedUri(true);
-    setTimeout(() => setCopiedUri(false), 2000);
-  };
-
-  const participantCount = node.participants.length;
-  const totalBalance = node.participants.reduce((sum, p) => sum + BigInt(p.balance), BigInt(0));
-  const balanceHuman = (Number(totalBalance) / 1e6).toFixed(2);
-
-  const statusColor = 'bg-gray-200 text-gray-800';
-
-  const statusText = {
-    open: 'Open',
-    closed: 'Closed',
-  }[node.status] || 'Unknown';
-
-  return (
-    <div
-      className={`bg-white rounded-2xl p-4 space-y-3 border transition-colors cursor-pointer group ${
-        isInvitation
-          ? 'border-gray-200 hover:border-gray-300'
-          : 'border-gray-200 hover:border-gray-300'
-      }`}
-      onClick={onClick}
-    >
-      {/* Header with Status */}
-      <div className="flex items-start justify-between">
-        <div className="flex items-center gap-2">
-          <div className="p-2 rounded-lg bg-gray-100">
-            {isInvitation ? (
-              <Mail className="h-5 w-5 text-gray-700" />
-            ) : (
-              <Zap className="h-5 w-5 text-gray-700" />
-            )}
-          </div>
-          <div>
-            <h3 className="font-rubik-medium text-gray-900">
-              {CHAIN_NAMES[node.chain] || node.chain}
-            </h3>
-            <p className="text-sm text-gray-500">{node.token}</p>
-          </div>
-        </div>
-        <div className="flex flex-col items-end gap-1">
-          <span className={`px-3 py-1 rounded-full text-xs font-medium ${statusColor}`}>
-            {statusText}
-          </span>
-          {isInvitation && (
-            <span className="text-xs text-gray-700 font-medium">New Invitation</span>
-          )}
-        </div>
-      </div>
-
-      {/* Balance */}
-      <div className="bg-gray-50 rounded-xl p-3">
-        <p className="text-xs text-gray-500 mb-1">Total Channel Balance</p>
-        <p className="text-lg font-rubik-medium text-gray-900">
-          {balanceHuman} {node.token}
-        </p>
-      </div>
-
-      {/* Participants */}
-      <div className="flex items-center justify-between text-sm">
-        <span className="text-gray-600">Participants</span>
-        <span className="font-rubik-medium text-gray-900">
-          {participantCount} / {node.maxParticipants}
-        </span>
-      </div>
-
-      {/* App Session ID */}
-      <div className="bg-gray-50 rounded-xl p-3">
-        <div className="flex items-center justify-between mb-1">
-          <p className="text-xs text-gray-500">Session ID</p>
-          <button
-            onClick={handleCopyChannelId}
-            className="text-xs text-gray-700 hover:text-gray-900 flex items-center gap-1"
-          >
-            <Copy className="h-3 w-3" />
-            {copiedId ? 'Copied!' : 'Copy'}
-          </button>
-        </div>
-        <p className="text-xs font-mono text-gray-700 break-all">
-          {node.appSessionId}
-        </p>
-      </div>
-
-      {/* Lightning URI (for sharing) */}
-      {node.status === 'open' && participantCount < node.maxParticipants && (
-        <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-xs text-gray-700 font-medium">Share this link</p>
-            <button
-              onClick={handleCopyUri}
-              className="text-xs text-gray-700 hover:text-gray-900 flex items-center gap-1"
-            >
-              <Copy className="h-3 w-3" />
-              {copiedUri ? 'Copied!' : 'Copy URI'}
-            </button>
-          </div>
-          <p className="text-xs font-mono text-gray-700 break-all">
-            {node.uri}
-          </p>
-        </div>
-      )}
-
-      {/* View Details */}
-      <div className="flex items-center justify-between">
-        <div className="text-xs text-gray-500">
-          Created {new Date(node.createdAt).toLocaleDateString()}
-        </div>
-  <div className="flex items-center gap-1 text-xs text-gray-700 group-hover:text-black">
-          <span>{isInvitation ? 'View Invitation' : 'View Details'}</span>
-          <ChevronRight className="h-3 w-3" />
-        </div>
-      </div>
-    </div>
+  const auth = useYellowAuth(userId, chain);
+  const balances = useYellowBalances(userId, chain, DEFAULT_ASSET, auth.authenticated);
+  const channels = useChannelActions(userId, chain, balances.refreshBalances);
+  const custody = useCustodyActions(
+    userId,
+    () => { balances.refreshBalances(); channels.fetchChannels(); },
+    channels.saveChannelId,
   );
-}
+  const sessions = useAppSessions(userId, chain, auth.authenticated, auth.walletAddress, balances.refreshBalances);
 
-/**
- * Lightning Nodes View Component
- * Main dashboard view with authentication, invitations, search, and active sessions
- */
-export function LightningNodesView() {
-  const {
-    authenticated,
-    authenticating,
-    walletAddress,
-    allSessions,
-    activeSessions,
-    invitations,
-    searchSession,
-    authenticate,
-    discoverSessions,
-    loading,
-    error,
-  } = useLightningNodes();
-
-  const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [fundChannelModalOpen, setFundChannelModalOpen] = useState(false);
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [searchError, setSearchError] = useState<string | null>(null);
-
-  // OPTIMIZATION: On-demand authentication and session discovery
-  // Trigger authentication when component mounts (user navigates to Lightning section)
   useEffect(() => {
-    const initializeLightningNodes = async () => {
-      if (!authenticated && !authenticating) {
-        console.log('[LightningNodesView] User navigated to Lightning section - initializing...');
-        await authenticate('base');
-        
-        // After authentication, fetch sessions
-        await discoverSessions('base');
-      } else if (authenticated && allSessions.length === 0 && !loading) {
-        // Already authenticated but no sessions loaded yet
-        console.log('[LightningNodesView] Authenticated but no sessions loaded - fetching...');
-        await discoverSessions('base');
-      }
-    };
+    onYellowAuthStateChangeAction?.({
+      authenticated: auth.authenticated,
+      authenticating: auth.authenticating,
+    });
+  }, [auth.authenticated, auth.authenticating, onYellowAuthStateChangeAction]);
 
-    initializeLightningNodes();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Only run on mount
+  // ── Dialog state ────────────────────────────────────────────────────────
+  const [dialog, setDialog] = useState<SessionDialogState>({
+    open: false,
+    mode: 'create',
+    managedSession: null,
+  });
 
-  // Restore last-opened node after refresh
+  const openCreate = () => setDialog({ open: true, mode: 'create', managedSession: null });
+  const openManage = useCallback(
+    async (session: AppSession) => {
+      setDialog({ open: true, mode: 'manage', managedSession: session });
+      await sessions.loadSessionDetail(session.appSessionId);
+    },
+    [sessions],
+  );
+  const closeDialog = () => setDialog((d: SessionDialogState) => ({ ...d, open: false }));
+
   useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem(LAST_SELECTED_LN_NODE_ID_KEY);
-      if (saved) setSelectedNodeId(saved);
-    } catch {
-      // ignore (SSR / privacy mode)
-    }
-  }, []);
+    if (!dialog.open || dialog.mode !== 'manage' || !dialog.managedSession) return;
+    const id = dialog.managedSession.appSessionId;
+    const interval = setInterval(() => {
+      sessions.loadSessionDetail(id);
+    }, 30_000);
+    return () => clearInterval(interval);
+  }, [dialog.open, dialog.mode, dialog.managedSession?.appSessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Persist selection
+  const managedSessionFresh =
+    dialog.mode === 'manage' && sessions.selectedSessionDetail.session
+      ? sessions.selectedSessionDetail.session
+      : dialog.managedSession;
+
+  // ── Top tab state ───────────────────────────────────────────────────────
+  const [topTab, setTopTab] = useState<LightningTopTab>('status');
+  const handleTopTabChange = (value: LightningTopTab) => setTopTab(value);
+  const hasAutoSwitchedToBalancesRef = useRef(false);
+  const [dismissedSessionIds, setDismissedSessionIds] = useState<Set<string>>(new Set());
+
   useEffect(() => {
-    try {
-      if (selectedNodeId) {
-        window.localStorage.setItem(LAST_SELECTED_LN_NODE_ID_KEY, selectedNodeId);
-      } else {
-        window.localStorage.removeItem(LAST_SELECTED_LN_NODE_ID_KEY);
-      }
-    } catch {
-      // ignore
-    }
-  }, [selectedNodeId]);
+    if (!auth.authenticated) return;
+    if (hasAutoSwitchedToBalancesRef.current) return;
+    if (topTab !== 'status') return;
+    hasAutoSwitchedToBalancesRef.current = true;
+    setTopTab('balances');
+  }, [auth.authenticated, topTab]);
 
-  // Deep link handling - auto-search if session param is present
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const sessionParam = params.get('session');
+  const visibleSessions = sessions.sessions
+    .filter((s) => (s.status || '').toLowerCase() !== 'closed')
+    .filter((s) => !dismissedSessionIds.has(s.appSessionId))
+    .filter((s) => {
+      const me = auth.walletAddress?.toLowerCase();
+      if (!me) return false;
+      if (!s.participants?.length) return true;
+      return s.participants.some((p) => p.address.toLowerCase() === me);
+    });
 
-    if (sessionParam && authenticated && !selectedNodeId) {
-      console.log('[Lightning] Deep link detected:', sessionParam);
-      handleSearch(sessionParam);
-
-      // Clean up URL
-      window.history.replaceState({}, '', window.location.pathname);
-    }
-  }, [authenticated, selectedNodeId]);
-
-  const handleSearch = async (sessionId: string) => {
-    setSearchError(null);
-
-    try {
-      const node = await searchSession(sessionId);
-      if (node) {
-        setSelectedNodeId(node.id);
-      } else {
-        setSearchError('Session not found or you are not a participant');
-      }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to search for session';
-      setSearchError(errorMessage);
-    }
-  };
-
-  // Show Lightning Node details if one is selected
-  if (selectedNodeId) {
+  // ── Not signed in ───────────────────────────────────────────────────────
+  if (!userId) {
     return (
-      <LightningNodeDetails
-        lightningNodeId={selectedNodeId}
-        onClose={() => setSelectedNodeId(null)}
-      />
-    );
-  }
-
-  // Show loading state while authenticating
-  if (authenticating && !authenticated) {
-    return (
-      <div className="flex flex-col items-center justify-center py-16">
-        <Loader2 className="h-8 w-8 animate-spin text-gray-400 mb-4" />
-        <p className="text-gray-500 font-rubik-normal">Authenticating wallet...</p>
-        <p className="text-sm text-gray-400 mt-2">Connecting to Yellow Network</p>
+      <div className="flex flex-col items-center justify-center py-12 text-center">
+        <Zap className="h-10 w-10 text-gray-300 mb-3" />
+        <p className="text-gray-500 text-sm">Sign in to use Lightning Nodes</p>
       </div>
     );
   }
 
-  const safeActiveSessions = activeSessions || [];
-  const safeInvitations = invitations || [];
-  const hasAnySessions = safeActiveSessions.length > 0 || safeInvitations.length > 0;
-
-  // Show empty state if no sessions
-  if (!hasAnySessions && !loading) {
-    return (
-      <>
-        {/* Authentication Banner */}
-        <AuthenticationBanner
-          authenticated={authenticated}
-          authenticating={authenticating}
-          walletAddress={walletAddress}
-          error={error}
-        />
-
-        {/* Empty State */}
-        <div className="flex flex-col items-center justify-center py-16 md:py-20">
-          <div className="-mt-32">
-            <Image
-              src="/empty-mailbox-illustration-with-spiderweb-and-flie-2025-10-20-04-28-09-utc.gif"
-              alt="No Lightning Nodes"
-              width={320}
-              height={320}
-              priority
-              className="object-contain mix-blend-multiply"
-            />
-          </div>
-          <p className="text-gray-600 text-lg md:text-xl font-rubik-medium z-10 -mt-16 mb-4">
-            No Lightning Nodes Available
-          </p>
-          <p className="text-sm text-gray-500 mb-6">
-            Create a new Lightning Node or join an existing one using the button below
-          </p>
-          <button
-            onClick={() => setCreateModalOpen(true)}
-            className="bg-black text-white px-6 py-3 rounded-xl font-rubik-medium hover:bg-gray-800 transition-colors flex items-center gap-2 shadow-lg shadow-gray-300/50 border border-gray-300 active:scale-[0.99]"
-          >
-            <Zap className="h-4 w-4" />
-            Create / Join Lightning Node
-          </button>
-        </div>
-
-        <CreateLightningNodeModal
-          open={createModalOpen}
-          onOpenChange={setCreateModalOpen}
-          onJoined={(node) => {
-            setSelectedNodeId(node.id);
-          }}
-        />
-
-        <FundChannelModal
-          open={fundChannelModalOpen}
-          onOpenChange={setFundChannelModalOpen}
-          chain="base"
-          asset="usdc"
-          onFundComplete={() => {
-            // Optionally refresh data after funding
-          }}
-        />
-      </>
-    );
-  }
-
-  // Show list of Lightning Nodes
+  // ── Render ──────────────────────────────────────────────────────────────
   return (
-    <>
-      {/* Authentication Banner */}
-      <AuthenticationBanner
-        authenticated={authenticated}
-        authenticating={authenticating}
-        walletAddress={walletAddress}
-        error={error}
-      />
-
-      <div className="space-y-6">
-        {/* New Invitations Section */}
-        {safeInvitations.length > 0 && (
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <Mail className="h-5 w-5 text-blue-600" />
-                <h2 className="text-lg font-rubik-medium text-gray-900">
-                  New Invitations
-                </h2>
-                <span className="bg-blue-100 text-blue-700 text-xs font-medium px-2 py-1 rounded-full">
-                  {safeInvitations.length}
-                </span>
-              </div>
-            </div>
-            <div className="space-y-3">
-              {safeInvitations.map((node) => (
-                <LightningNodeCard
-                  key={node.appSessionId}
-                  node={node}
-                  onClick={() => setSelectedNodeId(node.id)}
-                  isInvitation={true}
-                />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Active Sessions Section */}
-        {safeActiveSessions.length > 0 && (
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <Zap className="h-5 w-5 text-gray-700" />
-                <h2 className="text-base sm:text-lg font-rubik-medium text-gray-900">
-                  My Lightning Nodes
-                  <span className="ml-2 bg-gray-100 text-gray-700 text-[10px] sm:text-xs font-medium px-2 py-1 rounded-full">
-                    {safeActiveSessions.length}
-                  </span>
-                </h2>
-              </div>
-              <button
-                onClick={() => setCreateModalOpen(true)}
-                className="bg-black text-white px-4 py-2 rounded-xl font-rubik-medium hover:bg-gray-800 transition-colors flex items-center gap-2 text-sm shadow-lg shadow-gray-300/50 border border-gray-300 active:scale-[0.99]"
-              >
-                <Zap className="h-4 w-4" />
-                Create / Join
-              </button>
-            </div>
-            <div className="space-y-3">
-              {safeActiveSessions.map((node) => (
-                <LightningNodeCard
-                  key={node.appSessionId}
-                  node={node}
-                  onClick={() => setSelectedNodeId(node.id)}
-                />
-              ))}
-            </div>
-          </div>
-        )}
+    <div className="bg-[#161616] border border-white/10 rounded-2xl p-4 space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-base font-rubik-medium text-white flex items-center gap-1.5">
+            <Zap className="h-4 w-4 text-yellow-400" />
+            Lightning Node
+          </h2>
+          <p className="text-[11px] text-gray-300">Yellow Network off-chain payment channels</p>
+        </div>
+        <Select value={chain} onValueChange={setChain}>
+          <SelectTrigger className="h-7 w-28 text-xs bg-[#161616] border-white/10 text-white">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="bg-[#161616] text-white border-white/10">
+            {CHAINS.map((c) => (
+              <SelectItem key={c.id} value={c.id} className="text-xs">
+                {c.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
-      <CreateLightningNodeModal
-        open={createModalOpen}
-        onOpenChange={setCreateModalOpen}
-        onJoined={(node) => {
-          setSelectedNodeId(node.id);
-          setCreateModalOpen(false);
-        }}
-      />
+      {/* Top Tabs */}
+  <Tabs value={topTab} onValueChange={(v: string) => handleTopTabChange(v as LightningTopTab)}>
+        <TabsList className="grid grid-cols-4 h-9 bg-[#161616] border border-white/10 rounded-xl p-1">
+          {(
+            [
+              { id: 'status', label: 'Status' },
+              { id: 'balances', label: 'Balances' },
+              { id: 'moveFunds', label: 'Move Funds' },
+              { id: 'appSessions', label: 'App Sessions' },
+            ] as const
+          ).map((t) => (
+            <TabsTrigger
+              key={t.id}
+              value={t.id}
+              className="text-xs text-gray-300 rounded-lg px-2 data-[state=active]:bg-yellow-400 data-[state=active]:text-black data-[state=active]:shadow-sm"
+            >
+              {t.label}
+            </TabsTrigger>
+          ))}
+        </TabsList>
 
-      <FundChannelModal
-        open={fundChannelModalOpen}
-        onOpenChange={setFundChannelModalOpen}
-        chain="base"
-        asset="usdc"
-        onFundComplete={() => {
-          // Optionally refresh data after funding
-        }}
+        {/* Status */}
+        <TabsContent value="status" className="mt-3 min-h-[430px] max-h-[430px] overflow-y-auto">
+          <StatusCard
+            authenticated={auth.authenticated}
+            authenticating={auth.authenticating}
+            sessionId={auth.sessionId}
+            expiresAt={auth.expiresAt}
+            walletAddress={auth.walletAddress}
+            authError={auth.authError}
+            onReauth={auth.authenticate}
+          />
+        </TabsContent>
+
+        {/* Balances */}
+        <TabsContent value="balances" className="mt-3">
+          <BalancesCard
+            unified={balances.unified}
+            custodyAvailable={balances.custodyAvailable}
+            walletUsdcBalance={balances.walletUsdcBalance}
+            loading={balances.balancesLoading}
+            error={balances.balancesError}
+            onRefresh={balances.refreshBalances}
+            onAddFunds={() => setTopTab('moveFunds')}
+          />
+        </TabsContent>
+
+        {/* Move Funds */}
+        <TabsContent value="moveFunds" className="mt-3 min-h-[430px] max-h-[430px] overflow-y-auto">
+          {auth.authenticated ? (
+            <CustodyActionsCard
+              depositing={custody.depositing}
+              withdrawing={custody.withdrawing}
+              custodyAvailable={balances.custodyAvailable}
+              unified={balances.unified}
+              channels={channels.channels}
+              channelsLoading={channels.channelsLoading}
+              closingChannelId={channels.closingChannelId}
+              storedChannelId={channels.storedChannelId}
+              onDeposit={custody.depositToCustody}
+              onWithdraw={custody.withdrawFromCustody}
+              onCloseChannel={channels.closeChannel}
+              onDismissStoredChannel={channels.dismissStoredChannel}
+              onFetchChannels={channels.fetchChannels}
+            />
+          ) : (
+            <div className="text-center py-8">
+              <p className="text-xs text-gray-400">
+                Authenticate to access deposit/withdraw and custody channels.
+              </p>
+            </div>
+          )}
+        </TabsContent>
+
+        {/* App Sessions */}
+        <TabsContent value="appSessions" className="mt-3 min-h-[430px] max-h-[430px] overflow-y-auto">
+          {auth.authenticated ? (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-rubik-medium text-white">
+                  App Sessions
+                  {sessions.sessions.length > 0 && (
+                    <span className="ml-1.5 bg-gray-800 text-gray-200 text-[10px] px-1.5 py-0.5 rounded-full">
+                      {sessions.sessions.length}
+                    </span>
+                  )}
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={sessions.discoverSessions}
+                    disabled={sessions.sessionsLoading}
+                    className="text-gray-400 hover:text-gray-200 disabled:opacity-40"
+                    title="Discover sessions"
+                  >
+                    <RefreshCw
+                      className={`h-3.5 w-3.5 ${sessions.sessionsLoading ? 'animate-spin' : ''}`}
+                    />
+                  </button>
+                  <Button
+                    onClick={openCreate}
+                    className="h-7 text-xs bg-yellow-400 hover:bg-yellow-500 text-black px-3"
+                  >
+                    New Session
+                  </Button>
+                </div>
+              </div>
+
+              {sessions.sessionsLoading && sessions.sessions.length === 0 && (
+                <div className="flex items-center gap-2 text-xs text-gray-400 py-4 justify-center">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Discovering sessions…
+                </div>
+              )}
+
+              {!sessions.sessionsLoading && sessions.sessionsError && (
+                <p className="text-xs text-red-400">{sessions.sessionsError}</p>
+              )}
+
+              {!sessions.sessionsLoading && sessions.sessions.length === 0 && !sessions.sessionsError && (
+                <div className="text-center py-6 text-xs text-gray-400">
+                  <Zap className="h-8 w-8 mx-auto mb-2 text-gray-700" />
+                  No sessions found. Create one to get started.
+                </div>
+              )}
+
+              {visibleSessions.map((s) => (
+                  <SessionCard
+                    key={s.appSessionId}
+                    session={s}
+                    walletAddress={auth.walletAddress}
+                    onManage={() => openManage(s)}
+                    onClose={() => sessions.closeSession(s.appSessionId)}
+                    isClosing={sessions.closingSessionId === s.appSessionId}
+                    onDismiss={() =>
+                      setDismissedSessionIds((prev: Set<string>) => {
+                        const next = new Set(prev);
+                        next.add(s.appSessionId);
+                        return next;
+                      })
+                    }
+                  />
+                ))}
+            </div>
+          ) : (
+            <div className="text-center py-8">
+              <p className="text-xs text-gray-400">Authenticate to access app sessions.</p>
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
+
+      <SessionDialog
+        open={dialog.open}
+        mode={dialog.mode}
+        managedSession={managedSessionFresh}
+        loading={dialog.mode === 'manage' && sessions.selectedSessionDetail.loading}
+        onClose={closeDialog}
+        createContent={
+          userId ? (
+            <>
+              <CreateSessionForm
+                walletAddress={auth.walletAddress}
+                userId={userId}
+                chain={chain}
+                creating={sessions.creating}
+                onCreate={sessions.createSession}
+                onCreated={(id) => {
+                  closeDialog();
+                  toast.success(`Session created: ${id}`);
+                }}
+              />
+              <div className="pt-3 text-center">
+                <button
+                  type="button"
+                  onClick={() => setDialog({ open: true, mode: 'join', managedSession: null })}
+                  className="text-xs text-gray-400 hover:text-gray-200 underline underline-offset-2"
+                >
+                  Have an invite? Join with Session ID
+                </button>
+              </div>
+            </>
+          ) : null
+        }
+        joinContent={
+          userId ? (
+            <JoinSessionForm
+              userId={userId}
+              chain={chain}
+              onFound={(session) => {
+                const def = (session as any).definition;
+                const normalizeParticipants = (
+                  participants: AppSession['participants'] | string[] | undefined,
+                  allocations: SessionAllocation[] | undefined,
+                  defParticipants?: string[],
+                ): AppSession['participants'] => {
+                  if (participants && participants.length > 0) {
+                    const first = participants[0] as any;
+                    if (typeof first === 'string') {
+                      return (participants as string[]).map((address) => ({
+                        address,
+                        joined: false,
+                      }));
+                    }
+                    return participants as AppSession['participants'];
+                  }
+                  const fallbackList =
+                    defParticipants && defParticipants.length > 0
+                      ? defParticipants
+                      : (allocations ?? [])
+                          .map((a) => a.participant)
+                          .filter(Boolean);
+                  return fallbackList.map((address) => ({ address, joined: false }));
+                };
+                const normalized: AppSession = {
+                  ...session,
+                  chain: session.chain || chain,
+                  token:
+                    session.token ||
+                    session.allocations?.[0]?.asset ||
+                    'usdc',
+                  participants: normalizeParticipants(
+                    session.participants as any,
+                    session.allocations,
+                    def?.participants,
+                  ),
+                };
+                sessions.discoverSessions();
+                closeDialog();
+                setTimeout(() => openManage(normalized), 150);
+              }}
+            />
+          ) : null
+        }
+        manageContent={
+          dialog.mode === 'manage' && managedSessionFresh && userId ? (
+            <SessionManageView
+              session={managedSessionFresh}
+              balances={sessions.selectedSessionDetail.balances}
+              walletAddress={auth.walletAddress}
+              operating={sessions.operating}
+              onPatch={(intent, allocs) =>
+                sessions.patchSession(managedSessionFresh.appSessionId, intent, allocs)
+              }
+              onClose={async () => {
+                const ok = await sessions.closeSession(managedSessionFresh.appSessionId);
+                if (ok) closeDialog();
+                return ok;
+              }}
+            />
+          ) : null
+        }
       />
-    </>
+    </div>
   );
 }

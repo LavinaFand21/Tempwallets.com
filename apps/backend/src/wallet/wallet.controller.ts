@@ -42,7 +42,7 @@ export class WalletController {
     private readonly walletService: WalletService,
     // private readonly polkadotEvmRpcService: PolkadotEvmRpcService,
     private readonly pimlicoConfig: PimlicoConfigService,
-  ) { }
+  ) {}
 
   @Post('eip7702/send')
   @HttpCode(HttpStatus.OK)
@@ -96,13 +96,13 @@ export class WalletController {
       errors: validation.errors,
       config: validation.config
         ? {
-          chainId: validation.config.chainId,
-          bundlerUrl: validation.config.bundlerUrl,
-          paymasterUrl: validation.config.paymasterUrl,
-          delegationAddress: validation.config.delegationAddress,
-          entryPointAddress: validation.config.entryPointAddress,
-          hasApiKey: this.pimlicoConfig.hasPimlicoApiKey(),
-        }
+            chainId: validation.config.chainId,
+            bundlerUrl: validation.config.bundlerUrl,
+            paymasterUrl: validation.config.paymasterUrl,
+            delegationAddress: validation.config.delegationAddress,
+            entryPointAddress: validation.config.entryPointAddress,
+            hasApiKey: this.pimlicoConfig.hasPimlicoApiKey(),
+          }
         : undefined,
       enabled: this.pimlicoConfig.isEip7702Enabled(chain),
     };
@@ -511,24 +511,28 @@ export class WalletController {
       );
       return assets;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error';
       this.logger.error(
         `Failed to get any-chain assets for user ${finalUserId}: ${errorMessage}`,
       );
-      
+
       // Provide user-friendly error messages
       if (errorMessage.includes('API key not configured')) {
         throw new ServiceUnavailableException(
           'Asset data service is not configured. Please contact support.',
         );
       }
-      
-      if (errorMessage.includes('Zerion API error') || errorMessage.includes('failed for')) {
+
+      if (
+        errorMessage.includes('Zerion API error') ||
+        errorMessage.includes('failed for')
+      ) {
         throw new ServiceUnavailableException(
           'Unable to fetch asset data at this time. Please try again later.',
         );
       }
-      
+
       throw error;
     }
   }
@@ -863,7 +867,7 @@ export class WalletController {
   @Post('change/authorize')
   @UseGuards(RateLimitGuard)
   @HttpCode(HttpStatus.OK)
-  async authorize(@Req() req: any) { 
+  async authorize(@Req() req: any) {
     return {
       success: true,
       allowed: true,

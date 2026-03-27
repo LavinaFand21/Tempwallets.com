@@ -79,10 +79,10 @@ import { WalletMapper } from './mappers/wallet.mapper.js';
     AddressManager,
     // Factories
     AccountFactory,
-  NativeEoaFactory,
-  Eip7702AccountFactory,
-  // Delegation repository for EIP-7702
-  Eip7702DelegationRepository,
+    NativeEoaFactory,
+    Eip7702AccountFactory,
+    // Delegation repository for EIP-7702
+    Eip7702DelegationRepository,
     // Pimlico bundler/paymaster service
     PimlicoService,
     // Polkadot EVM RPC service
@@ -121,9 +121,9 @@ import { WalletMapper } from './mappers/wallet.mapper.js';
     SeedManager,
     AddressManager,
     AccountFactory,
-  NativeEoaFactory,
-  Eip7702AccountFactory,
-  Eip7702DelegationRepository,
+    NativeEoaFactory,
+    Eip7702AccountFactory,
+    Eip7702DelegationRepository,
     // Export Pimlico service
     PimlicoService,
     // Export Polkadot EVM RPC service

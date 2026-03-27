@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module.js';
 import { ValidationPipe, LogLevel } from '@nestjs/common';
 import { TraceIdInterceptor } from './common/trace-id.interceptor.js';
+import { GlobalExceptionFilter } from './common/http-exception.filter.js';
 import cookieParser from 'cookie-parser';
 import { DeviceIdMiddleware } from './rateLimiter/device-id.middleware.js';
 
@@ -24,6 +25,9 @@ async function bootstrap() {
   // Add trace ID interceptor globally
   app.useGlobalInterceptors(new TraceIdInterceptor());
 
+  // Add global exception filter for user-friendly error messages
+  app.useGlobalFilters(new GlobalExceptionFilter());
+
   // Enable CORS with dynamic origins
   const allowedOrigins = [
     'http://localhost:3000', // Next.js web app
@@ -42,23 +46,28 @@ async function bootstrap() {
     origin: (origin, callback) => {
       // Allow requests with no origin (like mobile apps or curl)
       if (!origin) return callback(null, true);
-      
+
       // Check if origin is in allowed list
       if (allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
-      
+
       // Allow all Vercel preview deployments
       if (origin.endsWith('.vercel.app')) {
         return callback(null, true);
       }
-      
+
       // Block all other origins
       callback(new Error('Not allowed by CORS'));
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control', 'Pragma'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Cache-Control',
+      'Pragma',
+    ],
   });
 
   // Enable validation

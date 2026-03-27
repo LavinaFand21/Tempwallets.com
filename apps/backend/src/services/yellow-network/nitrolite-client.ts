@@ -41,6 +41,8 @@ import type {
   NitroliteConfig,
   ChannelWithState,
   AppSession,
+  AppSessionState,
+  AppSessionIntent,
   AppDefinition,
   AppSessionAllocation,
   LedgerBalance,
@@ -92,7 +94,7 @@ export class NitroliteClient {
     this.mainWallet = options.mainWallet;
     this.publicClient = options.publicClient;
     this.walletClient = options.walletClient;
-    this.useSDK = options.useSDK ?? false; // TEMPORARILY DISABLED: SDK appears to be for Sepolia only
+    this.useSDK = options.useSDK ?? true; // Use SDK by default - it handles ABI encoding correctly for on-chain operations
 
     // Initialize WebSocket Manager
     this.ws = new WebSocketManager({
@@ -124,16 +126,26 @@ export class NitroliteClient {
    * 3. Authenticates with session key (if enabled)
    */
   /**
-   * Post-reconnect sync: Re-load channels and app sessions after WebSocket reconnection
-   * 
-   * OPTIMIZATION: Disabled aggressive post-reconnect sync.
-   * Channels and sessions will be fetched on-demand when user accesses Lightning Node UI.
+   * Post-reconnect sync: Invalidate the stale server-side session on reconnect.
+   *
+   * When the WebSocket closes and reconnects, Yellow Network's server resets the
+   * session for that connection. The local session key still looks valid (expiry
+   * hasn't passed), but the server will reject it for write operations.
+   *
+   * We solve this by clearing the local session here (a fast, in-memory operation —
+   * no network call). Re-authentication happens lazily the next time the user
+   * actually performs an operation, via the auth guards in createChannel(),
+   * createLightningNode(), etc.
    */
   async postReconnectSync(): Promise<void> {
-    console.log('[NitroliteClient] Post-reconnect: Skipping automatic sync (on-demand mode enabled)');
-    
-    // Note: Channels and app sessions will be fetched when the frontend requests them
-    // This avoids unnecessary load on the backend and Yellow Network
+    if (this.config.useSessionKeys) {
+      // Clear stale local session so isAuthenticated() returns false.
+      // The next user operation will trigger a fresh auth automatically.
+      this.auth.clearSession();
+      console.log(
+        '[NitroliteClient] Post-reconnect: Stale session cleared. Will re-authenticate on next operation.',
+      );
+    }
   }
 
   async initialize(): Promise<void> {
@@ -154,20 +166,24 @@ export class NitroliteClient {
         await this.postReconnectSync();
       }
     });
-    
+
     this.ws.on('disconnect', () => {
-      console.warn('[NitroliteClient] WebSocket disconnected. Will attempt reconnection...');
+      console.warn(
+        '[NitroliteClient] WebSocket disconnected. Will attempt reconnection...',
+      );
     });
-    
+
     this.ws.on('error', (error) => {
       console.error('[NitroliteClient] WebSocket error:', error);
     });
-    
+
     await this.ws.connect();
     // Connection success logged at debug level
 
-    // Step 2: Load configuration (contract addresses)
-    this.clearnodeConfig = await this.configLoader.loadConfig();
+    // Step 2: Load configuration (contract addresses).
+    // Pass the already-open this.ws so ConfigLoader reuses it instead of
+    // opening a second parallel WebSocket connection to the same server.
+    this.clearnodeConfig = await this.configLoader.loadConfig(this.ws);
     // Config loaded logged at debug level
 
     // Build custody addresses map
@@ -181,10 +197,10 @@ export class NitroliteClient {
 
     // Initialize Channel Service (SDK or Custom)
     if (this.useSDK) {
-      console.log('[NitroliteClient] Using Yellow Network SDK for channel operations');
-
       // For SDK, we need to pick a primary chain. We'll use the first one or Base (8453) if available.
-      const baseNetwork = this.clearnodeConfig.networks.find(n => n.chain_id === 8453);
+      const baseNetwork = this.clearnodeConfig.networks.find(
+        (n) => n.chain_id === 8453,
+      );
       const primaryNetwork = baseNetwork || this.clearnodeConfig.networks[0];
 
       if (!primaryNetwork) {
@@ -201,10 +217,10 @@ export class NitroliteClient {
         primaryNetwork.chain_id,
       );
 
-      console.log(`[NitroliteClient] SDK initialized for chain ${primaryNetwork.chain_id}`);
+      console.log(
+        `[NitroliteClient] SDK ready on chain ${primaryNetwork.chain_id}`,
+      );
     } else {
-      console.log('[NitroliteClient] Using custom implementation for channel operations');
-
       this.channelService = new ChannelService(
         this.ws,
         this.auth,
@@ -219,9 +235,15 @@ export class NitroliteClient {
       // Authentication logs moved to debug level
       await this.auth.authenticate({
         application: this.config.application,
-        allowances: [], // Empty = unrestricted session (Yellow Network requirement)
+        allowances: [
+          {
+            asset: 'usdc',
+            amount: '1000', // 1000 USDC spending cap for this session
+          },
+        ],
         expiryHours: 24,
-        scope: 'transfer,app.create,app.submit,channel.create,channel.update,channel.close', // Include all channel operations
+        scope:
+          'transfer,app.create,app.submit,channel.create,channel.update,channel.close', // Include all channel operations
       });
       // Authentication success logged at debug level
     }
@@ -249,6 +271,7 @@ export class NitroliteClient {
     initialDeposit?: bigint,
   ): Promise<ChannelWithState> {
     this.ensureInitialized();
+    await this.ensureAuthenticated();
     return await this.channelService.createChannel(
       chainId,
       token,
@@ -276,7 +299,15 @@ export class NitroliteClient {
     participants?: [Address, Address],
   ): Promise<void> {
     this.ensureInitialized();
-    await this.channelService.resizeChannel(channelId, chainId, amount, fundsDestination, token, participants);
+    await this.ensureAuthenticated();
+    await this.channelService.resizeChannel(
+      channelId,
+      chainId,
+      amount,
+      fundsDestination,
+      token,
+      participants,
+    );
   }
 
   /**
@@ -296,6 +327,7 @@ export class NitroliteClient {
     participants?: [Address, Address],
   ): Promise<void> {
     this.ensureInitialized();
+    await this.ensureAuthenticated();
     await this.channelService.closeChannel(
       channelId,
       chainId,
@@ -327,24 +359,14 @@ export class NitroliteClient {
 
     const {
       participants,
-      weights = participants.map(() => 100 / participants.length),
-      quorum = Math.ceil((participants.length / 2) * 100), // Majority by default
+      weights = participants.map((_, i) => (i === 0 ? 100 : 0)), // Judge model: creator=100, others=0
+      quorum = 100, // Judge model: only creator meets quorum
       token,
       initialAllocations = [],
       sessionData,
     } = options;
 
-    // Ensure authentication is valid before creating app session
-    if (!this.auth.isAuthenticated()) {
-      console.log('[NitroliteClient] Session expired or not authenticated, re-authenticating...');
-      await this.auth.authenticate({
-        application: this.config.application,
-        allowances: [],
-        expiryHours: 24,
-        scope: 'transfer,app.create,app.submit,channel.create,channel.update,channel.close',
-      });
-      console.log('[NitroliteClient] ✅ Re-authentication successful');
-    }
+    await this.ensureAuthenticated();
 
     const definition: AppDefinition = {
       protocol: 'NitroRPC/0.4',
@@ -364,13 +386,26 @@ export class NitroliteClient {
   }
 
   /**
+   * Expose the session-key auth for multi-signature scenarios.
+   *
+   * In the Judge model, the depositor's NitroliteClient can call
+   * getAuth().signPayload(req) to produce a second signature that
+   * the judge appends before submitting.
+   */
+  getAuth(): SessionKeyAuth {
+    return this.auth;
+  }
+
+  /**
    * Deposit funds to Lightning Node from unified balance (gasless)
    *
-   * @param appSessionId - Lightning Node session ID
-   * @param participant - Participant address
-   * @param asset - Asset identifier
-   * @param amount - Amount in human-readable format
-   * @param currentAllocations - Current allocations
+   * @param appSessionId        - Lightning Node session ID
+   * @param participant         - Participant address (depositor)
+   * @param asset               - Asset identifier
+   * @param amount              - Amount in human-readable format
+   * @param currentAllocations  - Current allocations
+   * @param version             - Next version number (currentVersion + 1)
+   * @param extraSignatures     - Depositor's signature if depositor != judge
    */
   async depositToLightningNode(
     appSessionId: Hash,
@@ -378,6 +413,8 @@ export class NitroliteClient {
     asset: string,
     amount: string,
     currentAllocations: AppSessionAllocation[],
+    version: number,
+    extraSignatures?: string[],
   ): Promise<void> {
     this.ensureInitialized();
     await this.appSessionService.depositToAppSession(
@@ -386,18 +423,21 @@ export class NitroliteClient {
       asset,
       amount,
       currentAllocations,
+      version,
+      extraSignatures,
     );
   }
 
   /**
-   * Transfer within Lightning Node (gasless)
+   * Transfer within Lightning Node (gasless, OPERATE intent)
    *
-   * @param appSessionId - Lightning Node session ID
-   * @param from - Sender address
-   * @param to - Recipient address
-   * @param asset - Asset identifier
-   * @param amount - Amount in human-readable format
+   * @param appSessionId       - Lightning Node session ID
+   * @param from               - Sender address
+   * @param to                 - Recipient address
+   * @param asset              - Asset identifier
+   * @param amount             - Amount in human-readable format
    * @param currentAllocations - Current allocations
+   * @param version            - Next version number (currentVersion + 1)
    */
   async transferInLightningNode(
     appSessionId: Hash,
@@ -406,6 +446,7 @@ export class NitroliteClient {
     asset: string,
     amount: string,
     currentAllocations: AppSessionAllocation[],
+    version: number,
   ): Promise<void> {
     this.ensureInitialized();
     await this.appSessionService.transferInAppSession(
@@ -415,17 +456,19 @@ export class NitroliteClient {
       asset,
       amount,
       currentAllocations,
+      version,
     );
   }
 
   /**
    * Withdraw from Lightning Node back to unified balance (gasless)
    *
-   * @param appSessionId - Lightning Node session ID
-   * @param participant - Participant address
-   * @param asset - Asset identifier
-   * @param amount - Amount in human-readable format
+   * @param appSessionId       - Lightning Node session ID
+   * @param participant        - Participant address
+   * @param asset              - Asset identifier
+   * @param amount             - Amount in human-readable format
    * @param currentAllocations - Current allocations
+   * @param version            - Next version number (currentVersion + 1)
    */
   async withdrawFromLightningNode(
     appSessionId: Hash,
@@ -433,6 +476,7 @@ export class NitroliteClient {
     asset: string,
     amount: string,
     currentAllocations: AppSessionAllocation[],
+    version: number,
   ): Promise<void> {
     this.ensureInitialized();
     await this.appSessionService.withdrawFromAppSession(
@@ -441,6 +485,7 @@ export class NitroliteClient {
       asset,
       amount,
       currentAllocations,
+      version,
     );
   }
 
@@ -461,6 +506,32 @@ export class NitroliteClient {
     );
   }
 
+  /**
+   * Submit app state directly with final allocations.
+   *
+   * Per Yellow Network NitroRPC/0.4, allocations represent the FINAL state
+   * after the operation, not the delta. The Clearnode computes deltas.
+   *
+   * @param appSessionId - App session ID
+   * @param intent - DEPOSIT | OPERATE | WITHDRAW
+   * @param version - Must be exactly currentVersion + 1
+   * @param allocations - FINAL allocation state after this update
+   */
+  async submitAppState(
+    appSessionId: Hash,
+    intent: AppSessionIntent,
+    version: number,
+    allocations: AppSessionAllocation[],
+  ): Promise<AppSessionState> {
+    this.ensureInitialized();
+    return await this.appSessionService.submitAppState(
+      appSessionId,
+      intent,
+      version,
+      allocations,
+    );
+  }
+
   // ============================================================================
   // Query Methods
   // ============================================================================
@@ -474,13 +545,43 @@ export class NitroliteClient {
   }
 
   /**
+   * Wait for the next `bu` (balance update) push notification from ClearNode.
+   *
+   * Yellow Network sends `bu` after every operation that changes the unified
+   * balance (resize, transfer, session operations). Use this instead of polling
+   * get_ledger_balances after a resize/deposit.
+   *
+   * @param timeoutMs - Maximum wait time (default 30s). Rejects with Error on timeout.
+   * @returns The raw balance_updates array from the notification.
+   */
+  async waitForBalanceUpdate(
+    timeoutMs = 30_000,
+  ): Promise<Array<{ asset: string; amount: string }>> {
+    this.ensureInitialized();
+    const data = await this.ws.waitForNotification('bu', timeoutMs);
+    return (data?.balance_updates ?? []) as Array<{
+      asset: string;
+      amount: string;
+    }>;
+  }
+
+  /**
+   * Get balances within a specific app session
+   * Uses get_ledger_balances with app_session_id as account_id
+   */
+  async getAppSessionBalances(appSessionId: Hash): Promise<LedgerBalance[]> {
+    this.ensureInitialized();
+    return await this.queryService.getAppSessionBalances(appSessionId);
+  }
+
+  /**
    * Get all Lightning Nodes (App Sessions)
    *
    * @param status - Filter by status
    */
   async getLightningNodes(
     status?: 'open' | 'closed',
-    participant?: string
+    participant?: string,
   ): Promise<AppSession[]> {
     this.ensureInitialized();
     return await this.queryService.getAppSessions(status, participant);
@@ -541,6 +642,13 @@ export class NitroliteClient {
   }
 
   /**
+   * Get authentication signature (main wallet signature from auth_verify)
+   */
+  getAuthSignature(): string | null {
+    return this.auth.getAuthSignature();
+  }
+
+  /**
    * Check if authenticated
    */
   isAuthenticated(): boolean {
@@ -566,6 +674,41 @@ export class NitroliteClient {
       throw new Error(
         'NitroliteClient not initialized. Call initialize() first.',
       );
+    }
+  }
+
+  /**
+   * Ensure the session key is still valid with the server before any write operation.
+   *
+   * Called lazily by createChannel / resizeChannel / closeChannel / createLightningNode.
+   * If the WebSocket reconnected (which clears the local session via postReconnectSync),
+   * or if the 24-hour session expired, this re-authenticates once — no polling, no timers.
+   */
+  private async ensureAuthenticated(): Promise<void> {
+    // Also check WebSocket connectivity — if the connection dropped
+    // the server invalidated the session even if it looks valid locally.
+    if (!this.auth.isAuthenticated() || !this.ws.isConnected()) {
+      console.log(
+        '[NitroliteClient] Session invalid, cleared, or WebSocket disconnected — re-authenticating before operation...',
+      );
+
+      // Reconnect the WebSocket if it dropped
+      if (!this.ws.isConnected()) {
+        await this.ws.connect();
+      }
+
+      await this.auth.authenticate({
+        application: this.config.application,
+        allowances: [
+          {
+            asset: 'usdc',
+            amount: '1000', // 1000 USDC spending cap for this session
+          },
+        ],
+        expiryHours: 24,
+        scope:
+          'transfer,app.create,app.submit,channel.create,channel.update,channel.close',
+      });
     }
   }
 }

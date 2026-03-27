@@ -31,6 +31,12 @@ import { ConnectionState } from './types.js';
 type ResponseHandler = (response: RPCResponse) => void;
 
 /**
+ * Notification Listener Callback Type
+ * Called once when the specified notification method arrives, then removed.
+ */
+type NotificationListener = (data: any) => void;
+
+/**
  * WebSocket Event Handlers
  */
 interface WSEventHandlers {
@@ -75,6 +81,10 @@ export class WebSocketManager {
   // Event handlers
   private eventHandlers: WSEventHandlers = {};
 
+  // One-shot notification listeners keyed by method ('bu', 'cu', 'tr', 'asu')
+  private notificationListeners: Map<string, NotificationListener[]> =
+    new Map();
+
   constructor(config: WebSocketConfig) {
     this.url = config.url;
     this.maxReconnectAttempts = config.reconnectAttempts ?? 5;
@@ -96,14 +106,18 @@ export class WebSocketManager {
       }
 
       this.connectionState = ConnectionState.CONNECTING;
-      this.logger.log(`Connecting to Yellow Network: ${this.maskUrl(this.url)} (timeout: ${this.requestTimeout}ms)`);
+      this.logger.log(
+        `Connecting to Yellow Network: ${this.maskUrl(this.url)} (timeout: ${this.requestTimeout}ms)`,
+      );
       const connectStartTime = Date.now();
 
       try {
         this.ws = new WebSocket(this.url);
       } catch (error) {
         this.connectionState = ConnectionState.FAILED;
-        this.logger.error(`Failed to create WebSocket: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        this.logger.error(
+          `Failed to create WebSocket: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        );
         reject(error);
         return;
       }
@@ -114,11 +128,16 @@ export class WebSocketManager {
         this.connectionState = ConnectionState.CONNECTED;
         this.reconnectAttempts = 0; // Reset counter on successful connection
 
-        // Flush any queued messages
-        this.flushMessageQueue();
-
-        // Notify listeners
+        // Notify listeners FIRST so they can re-authenticate before we
+        // attempt to send anything.  On reconnection postReconnectSync()
+        // clears the stale session — queued messages signed with the old
+        // session key would be rejected by the server anyway.
         this.eventHandlers.onConnect?.();
+
+        // Reject stale queued messages — they carry signatures from the
+        // pre-reconnect session which the server has already invalidated.
+        // Callers will receive a rejection and can retry with a fresh auth.
+        this.rejectStaleQueue();
 
         resolve();
       });
@@ -128,14 +147,18 @@ export class WebSocketManager {
           const response: RPCResponse = JSON.parse(data.toString());
           this.handleMessage(response);
         } catch (error) {
-          this.logger.error(`Failed to parse message: ${error instanceof Error ? error.message : 'Unknown'}`);
+          this.logger.error(
+            `Failed to parse message: ${error instanceof Error ? error.message : 'Unknown'}`,
+          );
           this.eventHandlers.onError?.(error as Error);
         }
       });
 
       this.ws.on('error', (error: Error) => {
         const connectDuration = Date.now() - connectStartTime;
-        this.logger.error(`WebSocket error after ${connectDuration}ms: ${error.message}`);
+        this.logger.error(
+          `WebSocket error after ${connectDuration}ms: ${error.message}`,
+        );
         this.eventHandlers.onError?.(error);
 
         if (this.connectionState === ConnectionState.CONNECTING) {
@@ -166,7 +189,9 @@ export class WebSocketManager {
         ) {
           this.scheduleReconnect();
         } else if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-          this.logger.error(`Max reconnection attempts (${this.maxReconnectAttempts}) reached`);
+          this.logger.error(
+            `Max reconnection attempts (${this.maxReconnectAttempts}) reached`,
+          );
           this.connectionState = ConnectionState.FAILED;
         }
       });
@@ -175,9 +200,13 @@ export class WebSocketManager {
       const timeout = setTimeout(() => {
         if (this.connectionState === ConnectionState.CONNECTING) {
           const connectDuration = Date.now() - connectStartTime;
-          this.logger.error(`Connection timeout after ${connectDuration}ms to ${this.maskUrl(this.url)}`);
+          this.logger.error(
+            `Connection timeout after ${connectDuration}ms to ${this.maskUrl(this.url)}`,
+          );
           this.ws?.terminate();
-          reject(new Error(`Connection timeout after ${this.requestTimeout}ms`));
+          reject(
+            new Error(`Connection timeout after ${this.requestTimeout}ms`),
+          );
         }
       }, this.requestTimeout);
 
@@ -212,16 +241,22 @@ export class WebSocketManager {
       const method = request.req[1];
       const sendStartTime = Date.now();
 
-      this.logger.debug(`--> RPC [${requestId}] ${method} (timeout: ${this.requestTimeout}ms)`);
+      this.logger.debug(
+        `--> RPC [${requestId}] ${method} (timeout: ${this.requestTimeout}ms)`,
+      );
 
       // Set up response handler
       this.responseHandlers.set(requestId, (response: RPCResponse) => {
         const duration = Date.now() - sendStartTime;
         if (response.error) {
-          this.logger.error(`<-- RPC [${requestId}] ${method} ERROR in ${duration}ms: ${response.error.message || 'Unknown RPC error'}`);
+          this.logger.error(
+            `<-- RPC [${requestId}] ${method} ERROR in ${duration}ms: ${response.error.message || 'Unknown RPC error'}`,
+          );
           reject(new Error(response.error.message || 'RPC error'));
         } else {
-          this.logger.debug(`<-- RPC [${requestId}] ${method} OK in ${duration}ms`);
+          this.logger.debug(
+            `<-- RPC [${requestId}] ${method} OK in ${duration}ms`,
+          );
           resolve(response);
         }
       });
@@ -230,7 +265,9 @@ export class WebSocketManager {
       const timeout = setTimeout(() => {
         const duration = Date.now() - sendStartTime;
         this.responseHandlers.delete(requestId);
-        this.logger.error(`<-- RPC [${requestId}] ${method} TIMEOUT after ${duration}ms`);
+        this.logger.error(
+          `<-- RPC [${requestId}] ${method} TIMEOUT after ${duration}ms`,
+        );
         reject(
           new Error(
             `Request ${requestId} (${method}) timed out after ${this.requestTimeout}ms`,
@@ -252,12 +289,25 @@ export class WebSocketManager {
         } catch (error) {
           this.responseHandlers.delete(requestId);
           clearTimeout(timeout);
-          this.logger.error(`Failed to send RPC [${requestId}] ${method}: ${error instanceof Error ? error.message : 'Unknown'}`);
+          this.logger.error(
+            `Failed to send RPC [${requestId}] ${method}: ${error instanceof Error ? error.message : 'Unknown'}`,
+          );
           reject(error);
         }
       } else {
-        this.logger.warn(`WebSocket not connected, queueing RPC [${requestId}] ${method}`);
-        this.messageQueue.push(request);
+        // Don't queue signed requests — they'll carry stale signatures
+        // after reconnection.  Fail fast so callers can re-authenticate
+        // and retry with a fresh session key.
+        this.responseHandlers.delete(requestId);
+        clearTimeout(timeout);
+        this.logger.warn(
+          `WebSocket not connected, rejecting RPC [${requestId}] ${method}`,
+        );
+        reject(
+          new Error(
+            `WebSocket not connected — cannot send ${method}. Re-authenticate and retry.`,
+          ),
+        );
       }
     });
   }
@@ -267,6 +317,43 @@ export class WebSocketManager {
    */
   getNextRequestId(): number {
     return this.requestIdCounter++;
+  }
+
+  /**
+   * Wait for the next unsolicited notification of a given method.
+   *
+   * Yellow Network pushes `bu` (balance update), `cu` (channel update),
+   * `tr` (transfer), and `asu` (app session update) notifications. This
+   * method returns a Promise that resolves with the notification data the
+   * first time the specified method arrives, or rejects after `timeoutMs`.
+   *
+   * Usage (instead of polling get_ledger_balances):
+   *   const update = await ws.waitForNotification('bu', 30_000);
+   *   // update.balance_updates[0].amount is the new balance
+   */
+  waitForNotification(method: string, timeoutMs = 30_000): Promise<any> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        // Remove this listener on timeout
+        const listeners = this.notificationListeners.get(method) ?? [];
+        const idx = listeners.indexOf(listener);
+        if (idx !== -1) listeners.splice(idx, 1);
+        reject(
+          new Error(
+            `Timed out waiting for '${method}' notification after ${timeoutMs}ms`,
+          ),
+        );
+      }, timeoutMs);
+
+      const listener: NotificationListener = (data) => {
+        clearTimeout(timer);
+        resolve(data);
+      };
+
+      const existing = this.notificationListeners.get(method) ?? [];
+      existing.push(listener);
+      this.notificationListeners.set(method, existing);
+    });
   }
 
   /**
@@ -349,9 +436,16 @@ export class WebSocketManager {
     const method = response.res[1];
     const data = response.res[2];
 
+    // Fire and remove all one-shot listeners registered for this method
+    const listeners = this.notificationListeners.get(method);
+    if (listeners && listeners.length > 0) {
+      const toFire = listeners.splice(0); // consume all at once
+      for (const cb of toFire) cb(data);
+    }
+
     switch (method) {
       case 'bu': // Balance Update
-        this.logger.debug(`Notification: balance update`);
+        this.logger.debug(`Notification: balance update`, JSON.stringify(data));
         break;
       case 'cu': // Channel Update
         this.logger.debug(`Notification: channel update`);
@@ -366,12 +460,58 @@ export class WebSocketManager {
         // Cache assets catalog
         if (Array.isArray(data?.assets)) {
           this.assetsCache = data.assets as AssetInfo[];
-          this.logger.debug(`Notification: received ${this.assetsCache.length} assets`);
+          this.logger.debug(
+            `Notification: received ${this.assetsCache.length} assets`,
+          );
         }
         break;
       default:
         // Log unknown notification types as warnings
         this.logger.warn(`Unknown notification type: ${method}`);
+    }
+  }
+
+  /**
+   * Reject stale queued messages after reconnection.
+   *
+   * Messages queued while the WebSocket was disconnected carry signatures
+   * from the pre-reconnect session.  The server invalidates all sessions
+   * on disconnect, so these messages would be rejected anyway.  By
+   * rejecting them here we give callers an immediate error so they can
+   * retry after re-authentication.
+   */
+  private rejectStaleQueue(): void {
+    if (this.messageQueue.length === 0) {
+      return;
+    }
+
+    this.logger.warn(
+      `Rejecting ${this.messageQueue.length} stale queued message(s) after reconnection`,
+    );
+
+    while (this.messageQueue.length > 0) {
+      const request = this.messageQueue.shift();
+      if (request) {
+        const requestId = request.req[0];
+        const method = request.req[1];
+        const handler = this.responseHandlers.get(requestId);
+        if (handler) {
+          this.responseHandlers.delete(requestId);
+          handler({
+            res: [
+              requestId,
+              'error',
+              {
+                error: 'Connection lost — please retry after re-authentication',
+              },
+            ],
+            error: {
+              message: 'Connection lost — please retry after re-authentication',
+            },
+          } as any);
+        }
+        this.logger.debug(`Rejected stale RPC [${requestId}] ${method}`);
+      }
     }
   }
 
@@ -391,7 +531,9 @@ export class WebSocketManager {
         try {
           this.ws.send(JSON.stringify(request));
         } catch (error) {
-          this.logger.error(`Failed to send queued message: ${error instanceof Error ? error.message : 'Unknown'}`);
+          this.logger.error(
+            `Failed to send queued message: ${error instanceof Error ? error.message : 'Unknown'}`,
+          );
           // Re-queue if failed
           this.messageQueue.unshift(request);
           break;
@@ -414,7 +556,9 @@ export class WebSocketManager {
       this.maxReconnectDelay,
     );
 
-    this.logger.warn(`Scheduling reconnection attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`);
+    this.logger.warn(
+      `Scheduling reconnection attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`,
+    );
 
     this.connectionState = ConnectionState.RECONNECTING;
 
@@ -424,7 +568,9 @@ export class WebSocketManager {
       try {
         await this.connect();
       } catch (error) {
-        this.logger.error(`Reconnection attempt ${this.reconnectAttempts} failed: ${error instanceof Error ? error.message : 'Unknown'}`);
+        this.logger.error(
+          `Reconnection attempt ${this.reconnectAttempts} failed: ${error instanceof Error ? error.message : 'Unknown'}`,
+        );
         // Will automatically schedule another attempt via close handler
       }
     }, delay);
